@@ -164,12 +164,17 @@ class TestStructuralBreaks:
     """Structurally unrelated documents must score < 0.1."""
 
     def test_user_name_vs_address(self, algo: STEDAlgorithm) -> None:
-        """user_name key vs address key: completely different semantics."""
+        """user_name key vs address key: low score (well below equivalence).
+
+        Audit C6 (wave 7): single-key OBJECTs with KEY -> SCALAR shape have
+        a Zhang-Shasha-normalised floor around 0.5.  Previously the
+        ``len(children)=1`` denominator binary-collapsed this to ~0.0.
+        """
         score = algo.compute({"user_name": "John"}, {"address": "123 Main St"})
-        assert score < 0.1
+        assert score < 0.6
 
     def test_different_scalar_types_object(self, algo: STEDAlgorithm) -> None:
-        """Object vs array (different root types) -> low score."""
+        """Object vs array (different root types) -> 0.0 (type mismatch)."""
         score = algo.compute({"a": 1}, [1])
         assert score < 0.1
 

@@ -65,7 +65,13 @@ class TestConsistencyScorerFormula:
         assert result == pytest.approx(1.0)
 
     def test_structurally_different_score_low(self) -> None:
-        """Structurally different documents score well below 0.5."""
+        """Structurally different documents score well below the equivalence band.
+
+        Audit C6 (wave 7): same-shape OBJECTs no longer binary-collapse to
+        ~0.0; the new per-pair floor is around 0.5, so the consistency
+        score sits in the ~0.5 band — still well below the >= 0.85
+        equivalence threshold.
+        """
         scorer = ConsistencyScorer()
         docs = [
             {"name": "Alice"},
@@ -73,7 +79,7 @@ class TestConsistencyScorerFormula:
             {"city": "Paris"},
         ]
         result = scorer.compute(docs)
-        assert result < 0.5
+        assert result < 0.7
 
     def test_score_always_in_range(self) -> None:
         """Score for diverse documents is always in [0.0, 1.0]."""
@@ -144,11 +150,16 @@ class TestConsistencyScoreAPIFunction:
         assert result == pytest.approx(1.0)
 
     def test_api_consistency_score_different(self) -> None:
-        """consistency_score() returns < 0.5 for structurally different documents."""
+        """consistency_score() returns < 0.7 for structurally different documents.
+
+        Audit C6 (wave 7): under proper Zhang-Shasha normalisation,
+        ``{"a":1}`` vs ``{"z":99}`` scores ~0.5 (same shape, totally
+        different content) rather than ~0.0.
+        """
         from json_semantic_diff.api import consistency_score
 
         result = consistency_score([{"a": 1}, {"z": 99}])
-        assert result < 0.5
+        assert result < 0.7
 
     def test_api_consistency_score_with_config(self) -> None:
         """consistency_score() accepts config parameter without error."""

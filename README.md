@@ -61,7 +61,7 @@ result = compare(
     {"userName": "Alice", "mailAddress": "alice@corp.com"},
 )
 
-print(result.similarity_score)   # ~0.98
+print(result.similarity_score)   # ~0.99
 print(result.key_mappings)       # {"user_name": "userName", "email_address": "mailAddress"}
 print(result.unmatched_left)     # ()
 print(result.unmatched_right)    # ()
@@ -121,7 +121,7 @@ erratic = [
     {"fullName": "Alice", "years": 30},
     {"person": "Alice"},
 ]
-print(consistency_score(erratic))  # ~0.15
+print(consistency_score(erratic))  # ~0.55
 ```
 
 ## API Reference
@@ -329,7 +329,7 @@ scorer = WeaveScorer(comparator)
 
 4. **Blended Cost.** Each node comparison blends structural and content distance: `cost = w_s * structural_distance + w_c * content_distance`.
 
-5. **Per-Level Normalisation.** At each tree level: `similarity = 1.0 - min(1.0, [d_matched + λ·|n_left - n_right|] / max(n_left, n_right, 1))`. This keeps scores in [0.0, 1.0] regardless of document depth.
+5. **Per-Level Normalisation (Zhang-Shasha).** At each structural tree level: `similarity = 1.0 - min(1.0, [d_matched + λ·|n_left - n_right|] / max(n_left, n_right, 1))`, where `n_left` / `n_right` are the **sum of children subtree sizes** on each side (not just the child count). This keeps scores in [0.0, 1.0] regardless of document depth and prevents deep value-subtree edits from binary-collapsing the score when the parent has few direct children.
 
 ### Consistency Score Formula
 

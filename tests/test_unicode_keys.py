@@ -35,14 +35,18 @@ def test_accented_vs_unaccented_key_pin() -> None:
 
     The library treats ``café`` and ``cafe`` as related-but-distinct keys
     — the key-matching layer detects the high textual similarity and
-    pairs them, but the resulting similarity is less than 1.0.  Pinning
-    the observed score (0.875) so any change is an intentional decision.
-    Note that NFC/NFKC normalisation is *not* applied; accented and
-    non-accented spellings remain distinct identities.
+    pairs them, but the resulting similarity is less than 1.0.
+
+    Audit C6 (wave 7): the score moved from 0.875 to 0.9375 because the
+    Zhang-Shasha denominator (KEY + SCALAR = 2) gives the small remaining
+    label cost half the weight it carried under the old ``len(children)``
+    denominator.  Pinning the new value so any further change is an
+    intentional decision.  Note that NFC/NFKC normalisation is *not*
+    applied; accented and non-accented spellings remain distinct identities.
     """
     result = compare({"café": 1}, {"cafe": 1})
     assert 0.0 < result.similarity_score < 1.0
-    assert result.similarity_score == 0.875
+    assert result.similarity_score == 0.9375
 
 
 def test_mixed_unicode_document_identical_scores_one() -> None:

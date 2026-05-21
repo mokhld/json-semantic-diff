@@ -36,16 +36,21 @@ class TestMixedArrays:
         assert result.similarity_score < 1.0
 
     def test_heterogeneous_vs_all_scalar_pinned(self) -> None:
-        """Comparing a mixed array against an all-scalar one is pinned at 0.0.
+        """Comparing a mixed array against an all-scalar one is pinned.
 
-        Under default (ORDERED) mode, positional substitution between a dict
-        element and a scalar element costs heavily; the algorithm currently
-        returns 0.0 — pinned here so a future heuristic change is noticed.
+        Under default (ORDERED) mode, three of four positions match in shape;
+        only the ``{"three": 3}`` vs ``3`` slot is a type mismatch.
+
+        Audit C6 (wave 7): under the previous ``len(children)``-based
+        normaliser this binary-collapsed to ~0.0.  With the Zhang-Shasha
+        subtree-size denominator the score reflects the actual amount of
+        matching structure — pinned here so future heuristic changes are
+        noticed.
         """
         left = {"items": [1, "two", {"three": 3}, None]}
         right = {"items": [1, 2, 3, 4]}
         result = compare(left, right)
-        assert result.similarity_score == pytest.approx(0.0)
+        assert result.similarity_score == pytest.approx(0.7333, abs=0.01)
 
     def test_auto_with_object_picks_ordered(self) -> None:
         """AUTO mode falls back to ORDERED when any element is an object.

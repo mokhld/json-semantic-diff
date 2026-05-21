@@ -53,20 +53,27 @@ class TestSC1IdenticalDocuments:
 
 
 class TestSC2StructurallyDifferent:
-    """SC2 — consistency_score returns < 0.5 for structurally different documents."""
+    """SC2 — consistency_score returns < 0.7 for structurally different documents.
+
+    Audit C6 (wave 7): the per-pair similarity for same-shape, different-content
+    OBJECTs no longer binary-collapses against a ``len(children)`` denominator.
+    The new floor is around 0.5 per pair, so the post-std-penalty consistency
+    score sits below 0.7 (but no longer below 0.5) — the spirit of the SC2
+    assertion (well below the equivalence band) still holds.
+    """
 
     def test_three_unrelated_objects(self) -> None:
-        """SC2: Three objects with completely different keys score < 0.5."""
+        """SC2: Three objects with completely different keys score < 0.7."""
         docs = [
             {"name": "Alice", "age": 30},
             {"product": "Widget", "price": 9.99},
             {"city": "Paris", "country": "France"},
         ]
         result = consistency_score(docs)
-        assert result < 0.5
+        assert result < 0.7
 
     def test_five_unrelated_objects(self) -> None:
-        """SC2: Five objects with completely different key sets score < 0.5."""
+        """SC2: Five objects with completely different key sets score < 0.7."""
         docs = [
             {"alpha": 1},
             {"beta": 2},
@@ -75,30 +82,43 @@ class TestSC2StructurallyDifferent:
             {"epsilon": 5},
         ]
         result = consistency_score(docs)
-        assert result < 0.5
+        assert result < 0.7
 
     def test_two_different_docs(self) -> None:
-        """SC2: Two structurally different documents score < 0.5."""
+        """SC2: Two structurally different documents score < 0.7."""
         result = consistency_score([{"a": 1}, {"z": 99}])
-        assert result < 0.5
+        assert result < 0.7
 
 
 class TestSC3NormalizedStdDev:
     """SC3 — formula uses max(0, mean - std), not a simple mean."""
 
     def test_formula_not_simple_mean(self) -> None:
-        """SC3: Variance penalty drives score below simple mean.
+        """SC3: Variance penalty drives score below the simple pair-score mean.
 
         With [{"a":1}, {"a":1}, {"zzz":999}]:
-        - Pair (0,1): score ~1.0 (identical)
-        - Pair (0,2): score ~0.0 (disjoint keys)
-        - Pair (1,2): score ~0.0 (disjoint keys)
+        - Pair (0,1): score 1.0 (identical)
+        - Pair (0,2): score ~0.5 (same shape, different key+value)
+        - Pair (1,2): score ~0.5 (same shape, different key+value)
 
-        Simple mean would be ~0.33. With std penalty, score must be <= 0.33.
+        Audit C6 (wave 7): the previous version of this test expected the
+        unrelated pairs to score ~0.0 (binary collapse).  Under proper
+        Zhang-Shasha normalisation they sit around 0.5.  The std penalty
+        still drives the consistency score below the actual pair-score mean
+        because the variance across pairs is non-zero.
         """
         docs = [{"a": 1}, {"a": 1}, {"zzz": 999}]
         result = consistency_score(docs)
-        simple_mean = 1.0 / 3.0  # two zeros, one 1.0
+        # Compute the actual mean of pair similarities so the assertion
+        # stays calibrated to whatever the per-pair formula produces.
+        from json_semantic_diff import compare
+
+        pair_scores = [
+            compare(docs[0], docs[1]).similarity_score,
+            compare(docs[0], docs[2]).similarity_score,
+            compare(docs[1], docs[2]).similarity_score,
+        ]
+        simple_mean = sum(pair_scores) / len(pair_scores)
         assert result <= simple_mean, (
             f"Score {result} should be <= simple mean {simple_mean} due to std penalty"
         )

@@ -558,10 +558,16 @@ class STEDAlgorithm:
     def _compute_object_similarity(self, obj_a: TreeNode, obj_b: TreeNode) -> float:
         """Compute similarity between two OBJECT nodes via Hungarian matching.
 
-        Matches KEY children optimally (order-invariant), normalizes the
-        resulting raw distance via the STED paper formula (child-count
-        denominator preserves backwards-compatible scoring for shallow
-        disjoint objects).
+        Matches KEY children optimally (order-invariant), then normalises by
+        the proper Zhang-Shasha denominator: the sum of KEY-child subtree
+        sizes on each side.
+
+        Audit finding C6 — using ``len(children)`` (the previous denominator)
+        is only correct when every KEY child has a shallow value subtree.
+        With nested OBJECT/ARRAY values, the matched-pair raw distance scales
+        with subtree size, easily exceeding the child count and clipping
+        ``normalize_similarity`` to 0.0.  Switching to subtree-size sums
+        matches the resolution that the KEY-level normaliser already uses.
 
         Args:
             obj_a: Left OBJECT node.
@@ -578,10 +584,12 @@ class STEDAlgorithm:
             return 1.0
 
         raw_dist = self._match_children_hungarian(children_a, children_b)
+        size_a = sum(subtree_size(c) for c in children_a)
+        size_b = sum(subtree_size(c) for c in children_b)
         return normalize_similarity(
             raw_dist,
-            len(children_a),
-            len(children_b),
+            size_a,
+            size_b,
             self._config.lambda_unmatched,
         )
 
@@ -589,7 +597,14 @@ class STEDAlgorithm:
         """Compute similarity between two ARRAY nodes.
 
         Dispatches to ordered (DP) or unordered (Hungarian) matching based
-        on the resolved array comparison mode.
+        on the resolved array comparison mode, then normalises by the
+        proper Zhang-Shasha denominator: the sum of ELEMENT-child subtree
+        sizes on each side.
+
+        Audit finding C6 — see :meth:`_compute_object_similarity` for the
+        rationale.  Arrays of nested OBJECT/ARRAY elements were collapsing
+        to ~0.0 under the old ``len(children)`` denominator whenever the
+        per-element raw distance exceeded the element count.
 
         Args:
             arr_a: Left ARRAY node.
@@ -612,10 +627,12 @@ class STEDAlgorithm:
         else:
             raw_dist = self._match_children_hungarian(children_a, children_b)
 
+        size_a = sum(subtree_size(c) for c in children_a)
+        size_b = sum(subtree_size(c) for c in children_b)
         return normalize_similarity(
             raw_dist,
-            len(children_a),
-            len(children_b),
+            size_a,
+            size_b,
             self._config.lambda_unmatched,
         )
 

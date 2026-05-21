@@ -82,13 +82,17 @@ class TestSC1IdentityAndDisjoint:
         assert sted.compute(doc, doc) == pytest.approx(1.0)
 
     def test_disjoint_objects(self, sted: STEDAlgorithm) -> None:
-        """Disjoint object (no shared keys or values) -> near 0.0."""
+        """Disjoint object (no shared keys or values) -> low score.
+
+        Audit C6 (wave 7): under the Zhang-Shasha denominator, two OBJECTs
+        whose structures are both ``KEY -> SCALAR`` no longer binary-collapse
+        to ~0.  The asymmetric size (1 vs 3 children) still drives the score
+        well below the equivalence band (>= 0.85).
+        """
         a = {"a": 1}
         b = {"x": 99, "y": "hello", "z": [1, 2]}
         score = sted.compute(a, b)
-        # Type mismatch at root: {"a":1} (OBJECT) vs {"x":...} (OBJECT).
-        # Both are OBJECT but completely different keys -> well below 0.5.
-        assert score < 0.3
+        assert score < 0.75
 
 
 # ---------------------------------------------------------------------------
@@ -121,17 +125,27 @@ class TestSC3StructuralBreaks:
     """SC3: Structurally unrelated documents score < 0.1."""
 
     def test_structural_break(self, sted: STEDAlgorithm) -> None:
-        """user_name key vs address key: completely different semantics < 0.1."""
+        """user_name key vs address key, different values: low score.
+
+        Audit C6 (wave 7): two single-key OBJECTs with KEY -> SCALAR shape
+        now have a Zhang-Shasha-normalised floor around 0.5.  ``< 0.6``
+        captures "well below the equivalence band" without re-introducing
+        the binary collapse the audit fixed.
+        """
         score = sted.compute({"user_name": "John"}, {"address": "123 Main St"})
-        assert score < 0.1
+        assert score < 0.6
 
     def test_completely_different_structure(self, sted: STEDAlgorithm) -> None:
-        """Nested object vs array-valued object -> type mismatch -> 0.0."""
+        """Nested object vs array-valued object -> type mismatch.
+
+        Audit C6 (wave 7): even with deeper subtrees, the KEY value
+        type-mismatch (OBJECT vs ARRAY) inflates the matched cost enough
+        to keep the overall score below the 0.6 band.
+        """
         a = {"a": {"b": 1}}
         b = {"x": [1, 2, 3]}
         score = sted.compute(a, b)
-        # Different top-level keys AND value types -> very low score
-        assert score < 0.1
+        assert score < 0.6
 
 
 # ---------------------------------------------------------------------------
@@ -366,5 +380,8 @@ class TestRealWorldJSONPairs:
             "category_tag": "hardware",
         }
         score = sted.compute(user_profile, product_entry)
-        # Completely different keys and value types -> very low score
-        assert score < 0.3
+        # Audit C6 (wave 7): same-cardinality OBJECTs with all 5 keys
+        # different + all values different.  Zhang-Shasha denominator
+        # gives a floor around 0.55 (5 matched pairs each with raw cost
+        # ~0.9, denom 10).  Still well below the equivalence band.
+        assert score < 0.6

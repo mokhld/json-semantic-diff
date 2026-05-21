@@ -166,11 +166,17 @@ class TestRegressionGuards:
         )
 
     def test_disjoint_docs_score_low(self) -> None:
-        """Cache layer does not inflate score for structurally dissimilar docs."""
+        """Cache layer does not inflate score for structurally dissimilar docs.
+
+        Audit C6 (wave 7): single-key OBJECTs with KEY -> SCALAR shape have a
+        Zhang-Shasha-normalised floor around 0.5.  The threshold here just
+        guards that the cache doesn't push the score back up into the
+        equivalence band (>= 0.85).
+        """
         cmp = STEDComparator()
         result = cmp.compare({"user_name": "John"}, {"address": "123 Main St"})
-        assert result.similarity_score < 0.1, (
-            f"Expected score < 0.1 for disjoint docs, got {result.similarity_score}"
+        assert result.similarity_score < 0.6, (
+            f"Expected score < 0.6 for disjoint docs, got {result.similarity_score}"
         )
 
     def test_identical_docs_score_1(self) -> None:

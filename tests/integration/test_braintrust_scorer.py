@@ -49,14 +49,19 @@ class TestBraintrustScorer:
         assert scorer.__name__ == "semantic_similarity"
 
     def test_scorer_structural_break(self, scorer: Any) -> None:
-        """Structurally different documents should score low (< 0.5)."""
+        """Structurally different documents should score below the equivalence band.
+
+        Audit C6 (wave 7): single-key OBJECTs with KEY -> SCALAR shape have a
+        Zhang-Shasha floor around 0.5 — the matched-pair raw distance no
+        longer binary-collapses against a ``len(children)=1`` denominator.
+        """
         result = scorer(
             input={},
             output={"user_name": "x"},
             expected={"address": "123"},
         )
         assert isinstance(result, float)
-        assert result < 0.5
+        assert result < 0.6
 
     def test_scorer_identical(self, scorer: Any) -> None:
         """Identical output and expected should score 1.0."""

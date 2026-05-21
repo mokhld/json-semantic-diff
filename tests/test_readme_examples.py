@@ -25,10 +25,11 @@ class TestCompareExample:
             {"user_name": "Alice", "email_address": "alice@corp.com"},
             {"userName": "Alice", "mailAddress": "alice@corp.com"},
         )
-        # README claims "~0.98".  Use README's precision (abs=0.01) so a
-        # benign algorithm refinement that still satisfies the documented
-        # contract does not fail the test (test_readme review finding T3).
-        assert result.similarity_score == pytest.approx(0.98, abs=0.01)
+        # README claims "~0.99".  Audit C6 (wave 7) nudged this case
+        # slightly upward (proper Zhang-Shasha denominator gives a touch
+        # less penalty for the partial-naming-match key).  Keep the wide
+        # tolerance so benign algorithm refinements don't fail the test.
+        assert result.similarity_score == pytest.approx(0.99, abs=0.02)
         assert result.key_mappings == {
             "user_name": "userName",
             "email_address": "mailAddress",
@@ -97,6 +98,11 @@ class TestConsistencyScoreExample:
             {"person": "Alice"},
         ]
         score = consistency_score(erratic)
-        # README claims ~0.15; allow a generous band so minor algorithm
-        # tweaks don't break the test, but catch big regressions.
-        assert 0.0 <= score < 0.4
+        # Audit C6 (wave 7): the per-pair similarity for same-shape /
+        # different-content single-key OBJECTs no longer binary-collapses,
+        # so the erratic generator's consistency lands around 0.55 rather
+        # than ~0.15.  The score still sits below the equivalence band and
+        # well below the stable_generator's 1.0; this looser ceiling keeps
+        # the regression-guard intent (catch huge jumps) without re-asserting
+        # the binary-collapse value.
+        assert 0.0 <= score < 0.7

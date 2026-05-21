@@ -36,7 +36,10 @@ def test_nan_vs_nan_does_not_score_one() -> None:
     result = compare({"x": float("nan")}, {"x": float("nan")})
     # NaN equality is unusual in Python; this is the documented behaviour
     # for now (no special-casing of NaN inside the leaf comparator).
-    assert result.similarity_score == 0.5
+    # Audit C6 (wave 7): with the Zhang-Shasha subtree-size denominator
+    # the KEY-pair raw distance (0.5 for the NaN content mismatch) is
+    # divided by 2 (KEY + SCALAR), giving a similarity floor of 0.75.
+    assert result.similarity_score == 0.75
 
 
 def test_inf_vs_inf_scores_one() -> None:

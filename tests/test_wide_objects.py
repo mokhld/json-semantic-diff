@@ -77,3 +77,39 @@ def test_wide_with_renames_under_time_budget() -> None:
         f"wide-with-renames compare took {elapsed:.3f}s, "
         f"budget {_WIDE_TIME_BUDGET_SECONDS:.1f}s"
     )
+
+
+def _wide_dict_with_deep_subtree(n: int, deep_levels: int, leaf_value: str) -> dict:
+    """Build a wide dict (n flat KEY+SCALAR pairs) plus one deeply-nested KEY.
+
+    The deep KEY's value is a chain of nested OBJECTs ``deep_levels`` deep,
+    ending in a leaf scalar that callers can vary to inject a single-leaf
+    difference.
+    """
+    payload: dict = {f"key_{i}": i for i in range(n)}
+    inner: dict = {"leaf": leaf_value}
+    for _ in range(deep_levels):
+        inner = {"inner": inner}
+    payload["deep"] = inner
+    return payload
+
+
+def test_wide_object_with_single_deep_leaf_change_scores_near_one() -> None:
+    """Wave-7 contract (audit C6): one deep leaf differs in a ~100-key object.
+
+    Before the wave-7 fix, ``len(children)``-based normalisation drove this
+    case below 0.1 (the matched-pair raw distance from the deep subtree
+    exceeded the OBJECT's child count and clipped to similarity 0).  The
+    Zhang-Shasha denominator (sum of children subtree sizes) keeps the
+    score in the [0.95, 1.0) band — almost-but-not-perfect, matching the
+    intuition that "99 of 100 keys identical, one deep leaf differs"
+    should not be a structural break.
+    """
+    left = _wide_dict_with_deep_subtree(n=100, deep_levels=10, leaf_value="foo")
+    right = _wide_dict_with_deep_subtree(n=100, deep_levels=10, leaf_value="bar")
+
+    result = compare(left, right)
+    assert 0.95 <= result.similarity_score < 1.0, (
+        f"single-deep-leaf-change scored {result.similarity_score:.4f}, "
+        "expected [0.95, 1.0)"
+    )
