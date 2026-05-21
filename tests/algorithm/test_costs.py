@@ -527,3 +527,133 @@ class TestCostUpdateBoolVsInt:
         b = make_scalar_node(5)
         result = cost_update(a, b, backend, default_config)
         assert result == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# numeric_tolerance (I3)
+# ---------------------------------------------------------------------------
+
+
+class TestNumericToleranceContentDistance:
+    """Direct ``_content_distance`` checks for numeric tolerance behaviour."""
+
+    def test_close_floats_within_tolerance_are_equal(self) -> None:
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node(3.14)
+        b = make_scalar_node(3.1400000001)
+        config = STEDConfig(numeric_tolerance=1e-6)
+        assert _content_distance(a, b, config) == pytest.approx(0.0)
+
+    def test_close_floats_with_zero_tolerance_are_distinct(self) -> None:
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node(3.14)
+        b = make_scalar_node(3.1400000001)
+        config = STEDConfig()  # numeric_tolerance=0.0 default
+        assert _content_distance(a, b, config) == pytest.approx(1.0)
+
+    def test_floats_outside_tolerance_are_distinct(self) -> None:
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node(3.14)
+        b = make_scalar_node(3.15)  # 0.01 apart, tol is 1e-6
+        config = STEDConfig(numeric_tolerance=1e-6)
+        assert _content_distance(a, b, config) == pytest.approx(1.0)
+
+    def test_int_pair_within_integer_tolerance(self) -> None:
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node(100)
+        b = make_scalar_node(101)
+        config = STEDConfig(numeric_tolerance=2.0)
+        assert _content_distance(a, b, config) == pytest.approx(0.0)
+
+    def test_bool_vs_int_with_tolerance_still_distinct(self) -> None:
+        """True vs 1.0 with ANY tolerance must remain distance 1.0 — bool
+        exclusion from H2 must not be undermined by numeric_tolerance.
+        """
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node(True)
+        b = make_scalar_node(1.0)
+        for tol in (0.0, 1e-6, 1.0, 1000.0):
+            config = STEDConfig(numeric_tolerance=tol)
+            assert _content_distance(a, b, config) == pytest.approx(1.0), (
+                f"tol={tol}: bool/int leak"
+            )
+
+    def test_bool_vs_bool_unchanged_with_tolerance(self) -> None:
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node(True)
+        b = make_scalar_node(True)
+        config = STEDConfig(numeric_tolerance=1e-3)
+        assert _content_distance(a, b, config) == pytest.approx(0.0)
+        c = make_scalar_node(False)
+        assert _content_distance(a, c, config) == pytest.approx(1.0)
+
+    def test_string_numeric_with_tolerance_and_coercion(self) -> None:
+        """type_coercion=True + numeric_tolerance applies tolerance after coerce."""
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node("3.14")
+        b = make_scalar_node(3.1400000001)
+        config = STEDConfig(type_coercion=True, numeric_tolerance=1e-6)
+        assert _content_distance(a, b, config) == pytest.approx(0.0)
+
+    def test_string_numeric_without_coercion_tolerance_irrelevant(self) -> None:
+        """Without type_coercion, a string side never reaches tolerance path."""
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node("3.14")
+        b = make_scalar_node(3.1400000001)
+        config = STEDConfig(numeric_tolerance=1e-6)  # type_coercion=False default
+        assert _content_distance(a, b, config) == pytest.approx(1.0)
+
+    def test_very_large_numbers_within_tolerance(self) -> None:
+        """Large finite numbers — tolerance applies normally."""
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        a = make_scalar_node(1e15)
+        b = make_scalar_node(1e15 + 1)
+        config = STEDConfig(numeric_tolerance=10.0)
+        assert _content_distance(a, b, config) == pytest.approx(0.0)
+
+    def test_huge_int_overflow_does_not_crash(self) -> None:
+        """Pathological int → float overflow path: tolerance check must not raise."""
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        # 10**400 cannot be converted to float without OverflowError
+        huge = 10**400
+        a = make_scalar_node(huge)
+        b = make_scalar_node(huge + 1)
+        config = STEDConfig(numeric_tolerance=1.0)
+        # We don't assert a specific score here — only that it returns a
+        # finite [0, 1] float without raising.  In practice the int==int
+        # equality fails (different values) and the overflowing float()
+        # subtract is caught — result is 1.0.
+        result = _content_distance(a, b, config)
+        assert result == pytest.approx(1.0)
+
+    def test_equal_huge_ints_still_zero(self) -> None:
+        """Equal int values short-circuit before any float() conversion."""
+        from json_semantic_diff.algorithm.costs import _content_distance
+
+        huge = 10**400
+        a = make_scalar_node(huge)
+        b = make_scalar_node(huge)
+        config = STEDConfig(numeric_tolerance=0.0)
+        assert _content_distance(a, b, config) == pytest.approx(0.0)
+
+    def test_default_tolerance_preserves_existing_scores(
+        self, backend: StaticBackend
+    ) -> None:
+        """Default config (tol=0.0) must not change cost_update output for floats."""
+        a = make_scalar_node(3.14)
+        b = make_scalar_node(3.14)
+        c = make_scalar_node(3.15)
+        config = STEDConfig()
+        assert cost_update(a, b, backend, config) == pytest.approx(0.0)
+        # 3.14 vs 3.15 — different values, w_c=0.5 → 0.5 content cost.
+        assert cost_update(a, c, backend, config) == pytest.approx(0.5)

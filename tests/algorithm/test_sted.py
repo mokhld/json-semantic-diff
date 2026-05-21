@@ -630,3 +630,130 @@ class TestKeyNormalizationResolution:
         s2 = algo._compute_key_similarity(base.children[0], two_diff.children[0])
         s3 = algo._compute_key_similarity(base.children[0], three_diff.children[0])
         assert s1 > s2 > s3, f"non-monotonic: {s1=}, {s2=}, {s3=}"
+
+
+# ---------------------------------------------------------------------------
+# Max depth (F3)
+# ---------------------------------------------------------------------------
+
+
+def _build_nested_dict(depth: int, leaf: object = 1) -> dict[str, object]:
+    """Build a linked-list-shaped dict: {"x": {"x": ... {"x": leaf}}}."""
+    node: object = leaf
+    for _ in range(depth):
+        node = {"x": node}
+    # mypy: the loop builds dict[str, object] eventually
+    assert isinstance(node, dict)
+    return node
+
+
+class TestMaxDepth:
+    def test_max_depth_none_default(self, backend: StaticBackend) -> None:
+        """Default config preserves None — full traversal happens."""
+        config = STEDConfig()
+        assert config.max_depth is None
+        algo = STEDAlgorithm(backend=backend, config=config)
+        # Trivial identical compare still scores 1.0.
+        assert algo.compute({"a": 1}, {"a": 1}) == pytest.approx(1.0)
+
+    def test_max_depth_one_shallow_identical(self, backend: StaticBackend) -> None:
+        """A shallow identical structure with max_depth=1 must still score 1.0.
+
+        With ``{"a": 1}`` the root OBJECT recurses into KEY (depth 1) and
+        then into the SCALAR value at depth 2.  max_depth=1 caps right at
+        the KEY level — the scalar value is not compared.  Since both KEY
+        labels match and both values are caught by the cap with identical
+        unmatched penalties on both sides, the algorithm still reports a
+        sensible non-negative score, but it is not guaranteed to be 1.0.
+        The strict invariant we DO require: an identical comparison with
+        max_depth=None must equal 1.0 (verified above).
+        """
+        config = STEDConfig(max_depth=1)
+        algo = STEDAlgorithm(backend=backend, config=config)
+        score = algo.compute({"a": 1}, {"a": 1})
+        assert 0.0 <= score <= 1.0
+
+    def test_max_depth_none_identical_deep_structure(
+        self, backend: StaticBackend
+    ) -> None:
+        """Identical deep structures: max_depth=None scores 1.0."""
+        config = STEDConfig()
+        algo = STEDAlgorithm(backend=backend, config=config)
+        deep = _build_nested_dict(10)
+        # Build a separate identical copy
+        deep_copy = _build_nested_dict(10)
+        assert algo.compute(deep, deep_copy) == pytest.approx(1.0)
+
+    def test_max_depth_changes_score_for_deep_diff(
+        self, backend: StaticBackend
+    ) -> None:
+        """Same deep-leaf difference scores DIFFERENTLY under max_depth=2 vs None.
+
+        Construct two trees that diverge only at a deep leaf.  With full
+        traversal, scores reflect a tiny leaf-only difference.  With
+        max_depth=2 the deep subtrees are short-circuited identically on
+        both sides — the cap dominates the score, so the two configs
+        produce different numbers.
+        """
+        a = _build_nested_dict(6, leaf=1)
+        b = _build_nested_dict(6, leaf=2)
+        algo_full = STEDAlgorithm(backend=backend, config=STEDConfig())
+        algo_capped = STEDAlgorithm(backend=backend, config=STEDConfig(max_depth=2))
+        score_full = algo_full.compute(a, b)
+        score_capped = algo_capped.compute(a, b)
+        # Both must be in [0, 1].
+        assert 0.0 <= score_full <= 1.0
+        assert 0.0 <= score_capped <= 1.0
+        # The capped score must differ — different policy → different number.
+        assert score_full != pytest.approx(score_capped, abs=1e-9), (
+            f"max_depth had no effect: full={score_full}, capped={score_capped}"
+        )
+
+    def test_max_depth_default_preserves_existing_behavior(
+        self, backend: StaticBackend
+    ) -> None:
+        """Default and explicit max_depth=None must give identical scores."""
+        a = {"x": {"y": {"z": 1}}}
+        b = {"x": {"y": {"z": 2}}}
+        s_default = STEDAlgorithm(backend=backend).compute(a, b)
+        s_explicit = STEDAlgorithm(
+            backend=backend, config=STEDConfig(max_depth=None)
+        ).compute(a, b)
+        assert s_default == pytest.approx(s_explicit)
+
+    def test_max_depth_one_caps_at_root(self, backend: StaticBackend) -> None:
+        """max_depth=1 short-circuits all object-children comparisons.
+
+        Two structurally identical but deeply different trees should still
+        produce a finite score (no recursion past the cap).
+        """
+        a = {"a": {"x": 1, "y": 2}}
+        b = {"a": {"x": 99, "y": 99}}
+        algo = STEDAlgorithm(backend=backend, config=STEDConfig(max_depth=1))
+        score = algo.compute(a, b)
+        assert 0.0 <= score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Deep recursion (T1, xfail until H1 — iterative refactor lands)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    reason="audit H1 — fully recursive tree build/walk, iterative refactor pending",
+    strict=False,
+)
+def test_deeply_nested_self_compare_does_not_recursion_error(
+    backend: StaticBackend,
+) -> None:
+    """A pathologically deep JSON should compare without RecursionError.
+
+    Today this fails (the tree builder and STED walk are both recursive
+    and blow the C-stack near 1500 levels).  Marked xfail so it auto-flips
+    to passing once H1 (iterative refactor) lands.
+    """
+    deep = _build_nested_dict(1500, leaf=1)
+    deep_copy = _build_nested_dict(1500, leaf=1)
+    algo = STEDAlgorithm(backend=backend)
+    score = algo.compute(deep, deep_copy)
+    assert score == pytest.approx(1.0)

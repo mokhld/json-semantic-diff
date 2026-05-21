@@ -300,3 +300,143 @@ class TestIgnorePathsHashable:
         c1 = STEDConfig(ignore_paths=("/timestamp",))
         c2 = STEDConfig(ignore_paths=("/timestamp",))
         assert c1 == c2
+
+
+# ---------------------------------------------------------------------------
+# numeric_tolerance configuration (I3)
+# ---------------------------------------------------------------------------
+
+
+class TestNumericToleranceDefaults:
+    def test_numeric_tolerance_default_is_zero(self) -> None:
+        config = STEDConfig()
+        assert config.numeric_tolerance == 0.0
+
+    def test_numeric_tolerance_default_is_float(self) -> None:
+        config = STEDConfig()
+        assert isinstance(config.numeric_tolerance, float)
+
+
+class TestNumericToleranceConstruction:
+    def test_small_positive_tolerance(self) -> None:
+        config = STEDConfig(numeric_tolerance=1e-6)
+        assert config.numeric_tolerance == pytest.approx(1e-6)
+
+    def test_large_positive_tolerance(self) -> None:
+        config = STEDConfig(numeric_tolerance=100.0)
+        assert config.numeric_tolerance == pytest.approx(100.0)
+
+    def test_zero_tolerance_explicit(self) -> None:
+        config = STEDConfig(numeric_tolerance=0.0)
+        assert config.numeric_tolerance == 0.0
+
+    def test_int_tolerance_accepted(self) -> None:
+        # Plain int is fine — it's a number.
+        config = STEDConfig(numeric_tolerance=1)
+        assert config.numeric_tolerance == 1
+
+
+class TestNumericToleranceFrozen:
+    def test_numeric_tolerance_is_frozen(self) -> None:
+        config = STEDConfig(numeric_tolerance=0.01)
+        with pytest.raises(FrozenInstanceError):
+            config.numeric_tolerance = 0.02  # type: ignore[misc]
+
+
+class TestNumericToleranceValidation:
+    def test_negative_tolerance_raises(self) -> None:
+        with pytest.raises(ValueError, match="numeric_tolerance"):
+            STEDConfig(numeric_tolerance=-0.01)
+
+    def test_very_negative_tolerance_raises(self) -> None:
+        with pytest.raises(ValueError, match="numeric_tolerance"):
+            STEDConfig(numeric_tolerance=-1e9)
+
+    def test_bool_tolerance_raises_type_error(self) -> None:
+        # bool is rejected explicitly so True doesn't silently mean 1.0.
+        with pytest.raises(TypeError, match="numeric_tolerance"):
+            STEDConfig(numeric_tolerance=True)  # type: ignore[arg-type]
+
+    def test_string_tolerance_raises_type_error(self) -> None:
+        with pytest.raises(TypeError, match="numeric_tolerance"):
+            STEDConfig(numeric_tolerance="0.01")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# max_depth configuration (F3)
+# ---------------------------------------------------------------------------
+
+
+class TestMaxDepthDefaults:
+    def test_max_depth_default_is_none(self) -> None:
+        config = STEDConfig()
+        assert config.max_depth is None
+
+
+class TestMaxDepthConstruction:
+    def test_max_depth_one(self) -> None:
+        config = STEDConfig(max_depth=1)
+        assert config.max_depth == 1
+
+    def test_max_depth_small(self) -> None:
+        config = STEDConfig(max_depth=3)
+        assert config.max_depth == 3
+
+    def test_max_depth_large(self) -> None:
+        config = STEDConfig(max_depth=1000)
+        assert config.max_depth == 1000
+
+    def test_max_depth_none_explicit(self) -> None:
+        config = STEDConfig(max_depth=None)
+        assert config.max_depth is None
+
+
+class TestMaxDepthFrozen:
+    def test_max_depth_is_frozen(self) -> None:
+        config = STEDConfig(max_depth=5)
+        with pytest.raises(FrozenInstanceError):
+            config.max_depth = 7  # type: ignore[misc]
+
+
+class TestMaxDepthValidation:
+    def test_zero_max_depth_raises(self) -> None:
+        with pytest.raises(ValueError, match="max_depth"):
+            STEDConfig(max_depth=0)
+
+    def test_negative_max_depth_raises(self) -> None:
+        with pytest.raises(ValueError, match="max_depth"):
+            STEDConfig(max_depth=-1)
+
+    def test_bool_max_depth_raises_type_error(self) -> None:
+        # bool subclasses int — reject explicitly.
+        with pytest.raises(TypeError, match="max_depth"):
+            STEDConfig(max_depth=True)  # type: ignore[arg-type]
+
+    def test_float_max_depth_raises_type_error(self) -> None:
+        with pytest.raises(TypeError, match="max_depth"):
+            STEDConfig(max_depth=1.5)  # type: ignore[arg-type]
+
+    def test_string_max_depth_raises_type_error(self) -> None:
+        with pytest.raises(TypeError, match="max_depth"):
+            STEDConfig(max_depth="3")  # type: ignore[arg-type]
+
+
+class TestNumericToleranceAndMaxDepthCombined:
+    def test_both_set_together(self) -> None:
+        config = STEDConfig(numeric_tolerance=1e-9, max_depth=10)
+        assert config.numeric_tolerance == pytest.approx(1e-9)
+        assert config.max_depth == 10
+
+    def test_config_with_new_fields_still_hashable(self) -> None:
+        config = STEDConfig(numeric_tolerance=0.5, max_depth=4)
+        assert isinstance(hash(config), int)
+
+    def test_config_with_new_fields_equality(self) -> None:
+        c1 = STEDConfig(numeric_tolerance=1e-6, max_depth=5)
+        c2 = STEDConfig(numeric_tolerance=1e-6, max_depth=5)
+        assert c1 == c2
+
+    def test_config_with_new_fields_inequality(self) -> None:
+        c1 = STEDConfig(numeric_tolerance=1e-6, max_depth=5)
+        c2 = STEDConfig(numeric_tolerance=1e-7, max_depth=5)
+        assert c1 != c2

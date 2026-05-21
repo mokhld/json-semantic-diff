@@ -597,3 +597,80 @@ class TestPathPropagation:
         tree = builder.build({"a": {"b": 42}})
         scalar = tree.children[0].children[0].children[0].children[0]
         assert scalar.path == "/a/b"
+
+
+# ---------------------------------------------------------------------------
+# JSON Pointer (RFC 6901) escaping of key path segments
+# ---------------------------------------------------------------------------
+
+
+class TestJsonPointerEscaping:
+    """Object key path segments must be RFC 6901-escaped.
+
+    Per RFC 6901 section 4:
+        ``~`` → ``~0``
+        ``/`` → ``~1``
+    with the ``~`` substitution applied first so a literal ``~`` in a key
+    does not corrupt the ``~`` produced by the ``/`` substitution.
+    """
+
+    def test_slash_in_key_is_escaped(self, builder: TreeBuilder) -> None:
+        tree = builder.build({"a/b": 1})
+        key_node = tree.children[0]
+        assert key_node.path == "/a~1b"
+        # raw_label preserves the original key untouched
+        assert key_node.raw_label == "a/b"
+
+    def test_tilde_in_key_is_escaped(self, builder: TreeBuilder) -> None:
+        tree = builder.build({"a~b": 1})
+        key_node = tree.children[0]
+        assert key_node.path == "/a~0b"
+        assert key_node.raw_label == "a~b"
+
+    def test_both_tilde_and_slash_in_key_tilde_first(
+        self, builder: TreeBuilder
+    ) -> None:
+        """Order matters: ``~`` first so the literal ``~`` does not eat ``~1``.
+
+        Input key ``"~/"`` must become ``~0~1`` (tilde then slash), NOT
+        ``~01`` (which would be the result of escaping slash first then
+        tilde — wrong per RFC 6901).
+        """
+        tree = builder.build({"~/": 1})
+        key_node = tree.children[0]
+        assert key_node.path == "/~0~1"
+        assert key_node.raw_label == "~/"
+
+    def test_round_trip_nested_escaping(self, builder: TreeBuilder) -> None:
+        """Nested keys containing ``/`` and ``~`` both get escaped at every depth."""
+        tree = builder.build({"a/b": {"c~d": 1}})
+        outer_key = tree.children[0]
+        assert outer_key.path == "/a~1b"
+        inner_obj = outer_key.children[0]
+        inner_key = inner_obj.children[0]
+        assert inner_key.path == "/a~1b/c~0d"
+        scalar = inner_key.children[0]
+        assert scalar.path == "/a~1b/c~0d"
+
+    def test_slash_only_key_at_root(self, builder: TreeBuilder) -> None:
+        tree = builder.build({"/": "v"})
+        key_node = tree.children[0]
+        assert key_node.path == "/~1"
+
+    def test_tilde_only_key_at_root(self, builder: TreeBuilder) -> None:
+        tree = builder.build({"~": "v"})
+        key_node = tree.children[0]
+        assert key_node.path == "/~0"
+
+    def test_array_index_path_unchanged(self, builder: TreeBuilder) -> None:
+        """Array indices are decimal integers — no escaping needed."""
+        tree = builder.build({"a/b": [10, 20]})
+        outer_key = tree.children[0]
+        inner_array = outer_key.children[0]
+        assert inner_array.children[0].path == "/a~1b/0"
+        assert inner_array.children[1].path == "/a~1b/1"
+
+    def test_ascii_key_path_is_byte_identical(self, builder: TreeBuilder) -> None:
+        """Keys with no ``~`` or ``/`` produce unchanged paths (no double-encoding)."""
+        tree = builder.build({"plain_key": 1})
+        assert tree.children[0].path == "/plain_key"

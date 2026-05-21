@@ -69,13 +69,19 @@ class TestWeaveScorer:
         assert isinstance(result["semantic_similarity"], float)
 
     def test_scorer_none_target(self) -> None:
-        """score() with target=None should return {'semantic_similarity': 0.0}."""
+        """score() with target=None should return semantic_similarity=None (N3 fix).
+
+        We previously silently returned 0.0 — that lied about the score on
+        missing reference data.  The adapter now returns ``None`` plus a
+        ``skipped`` flag.
+        """
         comparator = STEDComparator()
         scorer = _get_scorer(comparator)
 
         result = scorer.score(output={"a": 1}, target=None)
 
-        assert result == {"semantic_similarity": 0.0}
+        assert result["semantic_similarity"] is None
+        assert result.get("skipped") is True
 
     def test_scorer_score_range(self) -> None:
         """All score values should be in [0.0, 1.0]."""

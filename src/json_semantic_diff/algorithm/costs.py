@@ -68,11 +68,20 @@ def _content_distance(node_a: TreeNode, node_b: TreeNode, config: STEDConfig) ->
     ``False == 0`` are TRUE in Python (bool subclasses int), which would
     spuriously collapse ``True`` and ``1`` to distance 0.0.  We guard
     against that with a ``type(a) is type(b)`` check before equality, and
-    explicitly disqualify bools from the numeric-coercion fast-path.
+    explicitly disqualify bools from the numeric-coercion fast-path AND
+    from the numeric-tolerance fast-path.
 
     When ``config.type_coercion`` is True, numeric strings are coerced
     before comparison (e.g. ``"123" == 123`` yields 0.0) — but again,
     only when neither side is a bool.
+
+    When ``config.numeric_tolerance > 0``, numeric pairs whose absolute
+    difference is within tolerance are treated as equal (distance 0.0).
+    The check uses ``math.isclose`` semantics for finite values and falls
+    back to a direct ``abs(a - b) <= tol`` comparison; non-finite values
+    (``nan``/``inf``) fail the tolerance check and fall through to the
+    standard equality path.  Default ``numeric_tolerance = 0.0`` preserves
+    the original exact-equality behaviour bit-for-bit.
 
     Non-SCALAR nodes: 0.0 (structural nodes have no content to compare).
     """
@@ -97,17 +106,41 @@ def _content_distance(node_a: TreeNode, node_b: TreeNode, config: STEDConfig) ->
 
         # Same numeric value across int/float (e.g. 5 == 5.0) — int/float
         # are mutually compatible numeric types, no coercion needed.
-        if type(va) in (int, float) and type(vb) in (int, float) and va == vb:
+        a_is_num = type(va) in (int, float)
+        b_is_num = type(vb) in (int, float)
+        if a_is_num and b_is_num and va == vb:
             return 0.0
+
+        # Numeric tolerance: both sides numeric (already excluded bool above)
+        # → treat as equal when |a - b| <= tol.  Skip the subtract entirely
+        # when tol == 0 to avoid masking issues with very-large values whose
+        # subtraction may not be exactly representable.
+        tol = config.numeric_tolerance
+        if tol > 0.0 and a_is_num and b_is_num:
+            try:
+                if abs(float(va) - float(vb)) <= tol:
+                    return 0.0
+            except (OverflowError, ValueError):
+                # e.g. extremely large ints whose float() overflows — fall
+                # through to the exact-equality result (already 1.0 here).
+                pass
 
         if config.type_coercion:
             try:
                 # Coerce only when at least one side is numeric (int/float)
                 # AND neither side is a bool.  Already excluded by the
                 # a_is_bool/b_is_bool branch above.
-                if type(va) in (int, float) or type(vb) in (int, float):
-                    return 0.0 if float(va) == float(vb) else 1.0
-            except (ValueError, TypeError):
+                if a_is_num or b_is_num:
+                    fa = float(va)
+                    fb = float(vb)
+                    if fa == fb:
+                        return 0.0
+                    # Apply tolerance after coercion too — string "3.14"
+                    # vs float 3.1400000001 with tol=1e-6 should match.
+                    if tol > 0.0 and abs(fa - fb) <= tol:
+                        return 0.0
+                    return 1.0
+            except (ValueError, TypeError, OverflowError):
                 pass
         return 1.0
     return 0.0

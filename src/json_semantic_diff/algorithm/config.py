@@ -57,6 +57,32 @@ class STEDConfig:
               is not supported in v1 — use ``*`` to skip an index level.
             * Patterns may not be empty, may not end in ``/``, and may not
               contain empty path components (e.g. ``/a//b``).
+        numeric_tolerance: Absolute tolerance for numeric scalar comparison.
+            When both compared values are numeric (``int``/``float`` but
+            NOT ``bool``), they are treated as equal (content distance
+            ``0.0``) if ``abs(a - b) <= numeric_tolerance``.  Must be
+            ``>= 0.0``.  Default ``0.0`` preserves exact-equality
+            semantics so existing scores are unchanged.
+
+            Interaction with ``type_coercion``: when one side is a numeric
+            string and ``type_coercion=True``, the string is coerced first
+            and the tolerance is then applied to the resulting floats.
+        max_depth: Optional cap on tree-traversal recursion depth.  When
+            set, sub-trees deeper than ``max_depth`` levels below the roots
+            are not compared recursively — their contents contribute a
+            shallow ``cost_delete + cost_insert`` (treated as unrelated
+            unless trivially identical at the cap).
+
+            Trade-off: a smaller ``max_depth`` yields faster comparisons
+            (especially on deep nested structures) at the cost of losing
+            resolution past that depth — two large sub-trees with a tiny
+            deep-leaf difference will score identically to two completely
+            disjoint sub-trees once the cap is hit.
+
+            Must be ``None`` (no cap, full traversal) or ``>= 1`` (a depth
+            of ``0`` would short-circuit at the roots and is rejected).
+            Default ``None`` preserves the existing full-recursion
+            behaviour.
     """
 
     w_s: float = 0.5
@@ -66,6 +92,8 @@ class STEDConfig:
     type_coercion: bool = False
     null_equals_missing: bool = False
     ignore_paths: tuple[str, ...] = ()
+    numeric_tolerance: float = 0.0
+    max_depth: int | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.w_s <= 1.0:
@@ -92,6 +120,32 @@ class STEDConfig:
             raise TypeError(msg)
         for pattern in self.ignore_paths:
             _validate_ignore_path(pattern)
+        # numeric_tolerance: must be a non-negative float.  bool is a
+        # subclass of int — reject it explicitly so config(numeric_tolerance=True)
+        # doesn't silently mean tolerance=1.0.
+        tol_obj: object = self.numeric_tolerance
+        if isinstance(tol_obj, bool) or not isinstance(tol_obj, (int, float)):
+            msg = (
+                f"numeric_tolerance must be a non-negative number, "
+                f"got {type(tol_obj).__name__}: {tol_obj!r}"
+            )
+            raise TypeError(msg)
+        if self.numeric_tolerance < 0.0:
+            msg = f"numeric_tolerance must be >= 0.0, got {self.numeric_tolerance}"
+            raise ValueError(msg)
+        # max_depth: None means uncapped; otherwise must be a positive int.
+        # bool is a subclass of int — reject it for the same reason as above.
+        max_depth_obj: object = self.max_depth
+        if max_depth_obj is not None:
+            if isinstance(max_depth_obj, bool) or not isinstance(max_depth_obj, int):
+                msg = (
+                    f"max_depth must be None or a positive int, "
+                    f"got {type(max_depth_obj).__name__}: {max_depth_obj!r}"
+                )
+                raise TypeError(msg)
+            if self.max_depth is not None and self.max_depth < 1:
+                msg = f"max_depth must be None or >= 1, got {self.max_depth}"
+                raise ValueError(msg)
 
 
 def _validate_ignore_path(pattern: object) -> None:

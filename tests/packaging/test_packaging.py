@@ -221,6 +221,8 @@ class TestPackageMetadata:
             "STEDComparator",
             "STEDConfig",
             "compare",
+            "compare_batch",
+            "compare_batch_pairs",
             "consistency_score",
             "is_equivalent",
             "similarity_score",

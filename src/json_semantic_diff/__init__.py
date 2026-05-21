@@ -5,6 +5,8 @@ from __future__ import annotations
 from json_semantic_diff.algorithm.config import ArrayComparisonMode, STEDConfig
 from json_semantic_diff.api import (
     compare,
+    compare_batch,
+    compare_batch_pairs,
     consistency_score,
     is_equivalent,
     similarity_score,
@@ -19,6 +21,8 @@ __all__: list[str] = [
     "STEDComparator",
     "STEDConfig",
     "compare",
+    "compare_batch",
+    "compare_batch_pairs",
     "consistency_score",
     "is_equivalent",
     "similarity_score",

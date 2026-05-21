@@ -127,7 +127,7 @@ class TestLangSmithEvaluator:
         assert result.score == 1.0
 
     def test_evaluator_none_example(self) -> None:
-        """Passing example=None should not raise and should return a result."""
+        """Passing example=None should return score=None (N2 fix), not 0.0."""
         comparator = STEDComparator()
         evaluator = _get_evaluator(comparator)
 
@@ -135,7 +135,8 @@ class TestLangSmithEvaluator:
 
         result = evaluator(run, example=None)
         assert result.key == "semantic_similarity"
-        assert isinstance(result.score, float)
+        # N2: don't silently score 0.0 when reference data is missing.
+        assert result.score is None
 
     def test_import_error_without_langsmith(
         self, monkeypatch: pytest.MonkeyPatch

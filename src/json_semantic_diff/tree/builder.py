@@ -7,7 +7,12 @@ Scalar values preserve their original Python type in the TreeNode.value field.
 
 JSON Pointer paths (RFC 6901) are built during traversal:
 - Root is "" (empty string)
-- Each level appends "/{key_or_index}"
+- Each level appends "/{escaped_key_or_index}"
+- Per RFC 6901 section 4, key segments are escaped: ``~`` becomes ``~0``
+  and ``/`` becomes ``~1``.  The ``~`` substitution is applied first so
+  that a literal ``~`` in a key does not eat the ``~`` produced by the
+  ``/`` substitution.  Array indices are decimal integers and need no
+  escaping.
 """
 
 from __future__ import annotations
@@ -25,6 +30,22 @@ _normalizer = KeyNormalizer()
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 
+def _escape_path_segment(segment: str) -> str:
+    """Escape a single JSON Pointer reference token per RFC 6901 section 4.
+
+    The order matters: replace ``~`` first (``~`` → ``~0``), then ``/``
+    (``/`` → ``~1``).  Reversing the order would cause a literal ``~`` in
+    the input to corrupt the ``~1`` produced by an earlier ``/`` escape.
+
+    Args:
+        segment: A raw object key (already known to be a ``str``).
+
+    Returns:
+        The escaped reference token, safe to concatenate after ``"/"``.
+    """
+    return segment.replace("~", "~0").replace("/", "~1")
+
+
 @dataclass
 class TreeBuilder:
     """Converts any valid JSON value into a typed TreeNode tree.
@@ -35,7 +56,10 @@ class TreeBuilder:
 
     JSON Pointer paths (RFC 6901):
         Root node has path="" (empty string).
-        Each nested level appends "/{key_or_index}" to the parent path.
+        Each nested level appends "/{escaped_key_or_index}" to the parent
+        path.  Object keys are escaped per RFC 6901 section 4 (``~`` → ``~0``,
+        ``/`` → ``~1``, ``~`` substitution first).  Array indices are decimal
+        integers and require no escaping.
 
     Type preservation:
         SCALAR nodes store the original Python value in the `value` field.
@@ -153,7 +177,7 @@ class TreeBuilder:
                     f"got {type(key).__name__!r} at path {path or '/'!r}"
                 )
                 raise TypeError(msg)
-            key_path = f"{path}/{key}"
+            key_path = f"{path}/{_escape_path_segment(key)}"
             key_node = TreeNode(
                 node_type=NodeType.KEY,
                 label=_normalizer.normalize(key),
@@ -186,10 +210,14 @@ class TreeBuilder:
         array_node = TreeNode(node_type=NodeType.ARRAY, label="", path=path)
 
         for idx, item in enumerate(arr):
-            elem_path = f"{path}/{idx}"
+            # Array indices are decimal integers per RFC 6901 — no escaping
+            # is required, but stringify explicitly so the path and label
+            # formatting stay consistent.
+            idx_str = str(idx)
+            elem_path = f"{path}/{idx_str}"
             elem_node = TreeNode(
                 node_type=NodeType.ELEMENT,
-                label=str(idx),
+                label=idx_str,
                 path=elem_path,
             )
             child = self._build(item, path=elem_path, visited=visited)

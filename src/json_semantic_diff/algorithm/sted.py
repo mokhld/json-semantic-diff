@@ -140,7 +140,12 @@ class STEDAlgorithm:
     # Raw distance computation (unnormalized, used for cost matrices)
     # ------------------------------------------------------------------
 
-    def _compute_node_distance(self, node_a: TreeNode, node_b: TreeNode) -> float:
+    def _compute_node_distance(
+        self,
+        node_a: TreeNode,
+        node_b: TreeNode,
+        depth: int = 0,
+    ) -> float:
         """Compute raw edit distance between two nodes.
 
         Returns a non-negative distance value (may exceed 1.0 for structural
@@ -154,13 +159,33 @@ class STEDAlgorithm:
         - ARRAY: raw DP/Hungarian cost over ELEMENT children.
         - Type mismatch: returns max cost based on the larger node.
 
+        Max-depth policy: when ``config.max_depth`` is set and ``depth >=
+        max_depth``, no further recursion happens.  Instead the sub-tree
+        contributes ``cost_delete + cost_insert`` (= 2.0) — i.e. the two
+        sub-trees are treated as fully unrelated past the cap.  This
+        bounds traversal cost at the price of resolution past ``max_depth``
+        levels below the roots.
+
         Args:
             node_a: Left tree node.
             node_b: Right tree node.
+            depth: Current recursion depth from the comparison roots
+                (root call uses ``depth=0``).  Incremented when stepping
+                into a child's children.
 
         Returns:
             Non-negative float distance.
         """
+        # Max-depth cap: short-circuit before any structural work so deep
+        # sub-trees do not pay traversal cost.  We charge the standard
+        # "unrelated pair" cost (delete + insert) — equivalent to declining
+        # to compare further.  Identical-shape trivial leaves at the cap
+        # still go through their normal cost path below because the cap is
+        # checked *before* recursing into children, not at every node.
+        max_depth = self._config.max_depth
+        if max_depth is not None and depth >= max_depth:
+            return cost_delete(node_a) + cost_insert(node_b)
+
         # Type mismatch: full delete of the left subtree + full insert of the
         # right subtree.  Cost scales with subtree size so a deeply-different
         # branch correctly outweighs a single-scalar swap during Hungarian /
@@ -180,7 +205,7 @@ class STEDAlgorithm:
             # Recursive value-child distance
             if node_a.children and node_b.children:
                 val_dist = self._compute_node_distance(
-                    node_a.children[0], node_b.children[0]
+                    node_a.children[0], node_b.children[0], depth + 1
                 )
             else:
                 # Malformed KEY (no child): same = 0, different = 1
@@ -191,22 +216,28 @@ class STEDAlgorithm:
             # ELEMENT is transparent: distance = its single value-child distance
             if node_a.children and node_b.children:
                 return self._compute_node_distance(
-                    node_a.children[0], node_b.children[0]
+                    node_a.children[0], node_b.children[0], depth + 1
                 )
             return 0.0 if (not node_a.children and not node_b.children) else 1.0
 
         if node_type == NodeType.OBJECT:
             if not node_a.children and not node_b.children:
                 return 0.0
-            return self._match_children_hungarian(node_a.children, node_b.children)
+            return self._match_children_hungarian(
+                node_a.children, node_b.children, depth + 1
+            )
 
         # ARRAY (final variant)
         if not node_a.children and not node_b.children:
             return 0.0
         mode = self._resolve_array_mode(node_a, node_b)
         if mode == ArrayComparisonMode.ORDERED:
-            return self._match_children_sequence(node_a.children, node_b.children)
-        return self._match_children_hungarian(node_a.children, node_b.children)
+            return self._match_children_sequence(
+                node_a.children, node_b.children, depth + 1
+            )
+        return self._match_children_hungarian(
+            node_a.children, node_b.children, depth + 1
+        )
 
     # ------------------------------------------------------------------
     # Normalized similarity helpers for each structural node type
@@ -338,6 +369,7 @@ class STEDAlgorithm:
         self,
         children_a: list[TreeNode],
         children_b: list[TreeNode],
+        depth: int = 0,
     ) -> float:
         """Optimal bipartite child matching via Hungarian algorithm.
 
@@ -348,6 +380,9 @@ class STEDAlgorithm:
         Args:
             children_a: Children of the left node.
             children_b: Children of the right node.
+            depth: Recursion depth at which the children live (one deeper
+                than their parent).  Threaded through so ``max_depth``
+                short-circuits cost-matrix entries past the cap.
 
         Returns:
             Total raw matching distance (not normalized).
@@ -362,7 +397,7 @@ class STEDAlgorithm:
         cost_matrix = np.empty((m, n), dtype=float)
         for i, ca in enumerate(children_a):
             for j, cb in enumerate(children_b):
-                cost_matrix[i, j] = self._compute_node_distance(ca, cb)
+                cost_matrix[i, j] = self._compute_node_distance(ca, cb, depth)
 
         row_ind, col_ind = hungarian_match(cost_matrix)
 
@@ -387,6 +422,7 @@ class STEDAlgorithm:
         self,
         children_a: list[TreeNode],
         children_b: list[TreeNode],
+        depth: int = 0,
     ) -> float:
         """Ordered sequence alignment via DP edit distance.
 
@@ -397,6 +433,9 @@ class STEDAlgorithm:
         Args:
             children_a: Children of the left node (ordered).
             children_b: Children of the right node (ordered).
+            depth: Recursion depth at which the children live (one deeper
+                than their parent).  Threaded through so ``max_depth``
+                short-circuits substitution costs past the cap.
 
         Returns:
             Total raw alignment distance (not normalized).
@@ -417,7 +456,7 @@ class STEDAlgorithm:
         for i in range(1, m + 1):
             for j in range(1, n + 1):
                 sub_cost = self._compute_node_distance(
-                    children_a[i - 1], children_b[j - 1]
+                    children_a[i - 1], children_b[j - 1], depth
                 )
                 dp[i][j] = min(
                     dp[i - 1][j] + cost_delete(children_a[i - 1]),  # delete

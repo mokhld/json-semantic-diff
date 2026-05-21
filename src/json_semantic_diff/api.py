@@ -1,8 +1,11 @@
 """Public API functions for json-semantic-diff.
 
-This module provides the four user-facing functions: compare, consistency_score,
-is_equivalent, and similarity_score. Each call creates a fresh STEDComparator
-(or ConsistencyScorer) to guarantee zero global state mutation between calls.
+This module provides the user-facing functions: compare, compare_batch,
+compare_batch_pairs, consistency_score, is_equivalent, and similarity_score.
+The single-call entry points create a fresh STEDComparator (or
+ConsistencyScorer) to guarantee zero global state mutation between calls.
+The batch entry points create ONE comparator and reuse it across every pair
+so the embedding cache amortises across the batch.
 """
 
 from __future__ import annotations
@@ -14,7 +17,14 @@ from json_semantic_diff.comparator import STEDComparator
 from json_semantic_diff.result import ComparisonResult
 from json_semantic_diff.scorer import ConsistencyScorer
 
-__all__ = ["compare", "consistency_score", "is_equivalent", "similarity_score"]
+__all__ = [
+    "compare",
+    "compare_batch",
+    "compare_batch_pairs",
+    "consistency_score",
+    "is_equivalent",
+    "similarity_score",
+]
 
 
 def consistency_score(
@@ -116,6 +126,69 @@ def is_equivalent(
         raise ValueError(msg)
     result = compare(left, right, config=config)
     return result.similarity_score >= threshold
+
+
+def compare_batch(
+    lefts: list[Any],
+    right: Any,
+    config: STEDConfig | None = None,
+) -> list[ComparisonResult]:
+    """Compare each value in ``lefts`` against a single ``right`` value.
+
+    A single ``STEDComparator`` is constructed and reused across every pair,
+    so the embedding cache amortises across the batch — for ``N`` lefts that
+    share KEY labels with ``right``, the backend's ``embed()`` is typically
+    invoked only on the first pair.
+
+    Args:
+        lefts:  List of JSON values to compare against ``right``.  May be
+                empty (in which case an empty list is returned).
+        right:  The shared right-hand JSON value.
+        config: Algorithm hyper-parameters.  Defaults to ``STEDConfig()`` when
+                None.
+
+    Returns:
+        A list of ``ComparisonResult`` objects, one per element of ``lefts``,
+        in the same order as the input.
+
+    Raises:
+        TypeError: If any element of ``lefts``, or ``right``, is not a JSON
+            value (dict, list, str, int, float, bool, None).
+        ValueError: If ``config`` is provided with invalid weights.
+    """
+    if not lefts:
+        return []
+    comparator = STEDComparator(config=config)
+    return [comparator.compare(left, right) for left in lefts]
+
+
+def compare_batch_pairs(
+    pairs: list[tuple[Any, Any]],
+    config: STEDConfig | None = None,
+) -> list[ComparisonResult]:
+    """Compare a list of (left, right) pairs, returning results in input order.
+
+    A single ``STEDComparator`` is constructed and reused across every pair,
+    so the embedding cache amortises across the batch.
+
+    Args:
+        pairs:  List of ``(left, right)`` JSON value tuples.  May be empty
+                (in which case an empty list is returned).
+        config: Algorithm hyper-parameters.  Defaults to ``STEDConfig()`` when
+                None.
+
+    Returns:
+        A list of ``ComparisonResult`` objects, one per input pair, in the
+        same order as ``pairs``.
+
+    Raises:
+        TypeError: If any element of any pair is not a JSON value.
+        ValueError: If ``config`` is provided with invalid weights.
+    """
+    if not pairs:
+        return []
+    comparator = STEDComparator(config=config)
+    return [comparator.compare(left, right) for left, right in pairs]
 
 
 def similarity_score(
