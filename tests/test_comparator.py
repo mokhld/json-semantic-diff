@@ -421,3 +421,115 @@ class TestIgnorePaths:
         right = {"users": {"alice": {"id": "a2", "name": "Alice"}}}
         result = cmp.compare(left, right)
         assert result.similarity_score == pytest.approx(1.0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# aliases integration
+# ---------------------------------------------------------------------------
+
+
+class TestAliases:
+    """End-to-end behaviour of STEDConfig.aliases through STEDComparator."""
+
+    def test_default_aliases_is_noop(self) -> None:
+        """Empty aliases must not perturb the score on disjoint key names."""
+        cmp_default = STEDComparator()
+        cmp_empty = STEDComparator(config=STEDConfig(aliases=()))
+        r_default = cmp_default.compare({"uid": 1}, {"completely_different_key": 1})
+        r_empty = cmp_empty.compare({"uid": 1}, {"completely_different_key": 1})
+        assert r_default.similarity_score == pytest.approx(
+            r_empty.similarity_score, abs=1e-9
+        )
+
+    def test_alias_pair_matches_keys_left_to_right(self) -> None:
+        """aliases=(("uid", "user_id"),) makes uid <-> user_id score ~1.0."""
+        cmp = STEDComparator(config=STEDConfig(aliases=(("uid", "user_id"),)))
+        result = cmp.compare({"uid": 1}, {"user_id": 1})
+        # Aliased keys match → matched_pairs non-empty, no unmatched.
+        assert len(result.matched_pairs) == 1
+        assert result.key_mappings == {"uid": "user_id"}
+        assert result.unmatched_left == ()
+        assert result.unmatched_right == ()
+
+    def test_alias_pair_is_bidirectional(self) -> None:
+        """Same pair works when the alias is on the left instead."""
+        cmp = STEDComparator(config=STEDConfig(aliases=(("uid", "user_id"),)))
+        result = cmp.compare({"user_id": 1}, {"uid": 1})
+        assert len(result.matched_pairs) == 1
+        assert result.key_mappings == {"user_id": "uid"}
+        assert result.unmatched_left == ()
+        assert result.unmatched_right == ()
+
+    def test_multiple_aliases_combine(self) -> None:
+        """Several alias pairs all kick in within a single compare()."""
+        cmp = STEDComparator(
+            config=STEDConfig(
+                aliases=(("uid", "user_id"), ("addr", "address")),
+            )
+        )
+        result = cmp.compare(
+            {"uid": 1, "addr": "Main St"},
+            {"user_id": 1, "address": "Main St"},
+        )
+        assert len(result.matched_pairs) == 2
+        assert result.key_mappings == {"uid": "user_id", "addr": "address"}
+        assert result.unmatched_left == ()
+        assert result.unmatched_right == ()
+
+    def test_alias_survives_backend_normalisation(self) -> None:
+        """Backend normalises kebab-case to the same form as snake_case.
+
+        ``aliases=(("id", "user_id"),)`` matches ``{"id": 1}`` against
+        ``{"user-id": 1}`` because the StaticBackend's KeyNormalizer
+        rewrites ``user-id`` to the same canonical token sequence as
+        ``user_id``, and the alias set is pre-normalised at build time.
+        """
+        cmp = STEDComparator(config=STEDConfig(aliases=(("id", "user_id"),)))
+        result = cmp.compare({"id": 1}, {"user-id": 1})
+        assert len(result.matched_pairs) == 1
+        assert result.unmatched_left == ()
+        assert result.unmatched_right == ()
+
+    def test_aliases_force_match_against_competing_close_label(self) -> None:
+        """An alias overrides a closer-by-Levenshtein competitor.
+
+        Without the alias, the StaticBackend pairs ``uid`` with the
+        textually-closer ``uuid``.  With ``("uid", "user_id")`` declared,
+        the alias short-circuit makes ``uid <-> user_id`` cost 0.0 — so
+        the Hungarian matcher locks that pair in.
+        """
+        left = {"uid": 1}
+        right = {"user_id": 1, "uuid": "abc"}
+
+        cmp_no_alias = STEDComparator()
+        cmp_aliased = STEDComparator(config=STEDConfig(aliases=(("uid", "user_id"),)))
+        no_alias = cmp_no_alias.compare(left, right)
+        aliased = cmp_aliased.compare(left, right)
+
+        # With the alias declared, uid pairs with user_id.
+        assert aliased.key_mappings.get("uid") == "user_id"
+        # Without the alias, Levenshtein prefers the textually-closer
+        # ``uuid`` (one substitution) over ``user_id`` (much further) —
+        # so the no-alias result is different.
+        assert no_alias.key_mappings.get("uid") == "uuid"
+
+    def test_alias_does_not_affect_value_content_distance(self) -> None:
+        """Aliases unify KEYS, not VALUES — differing values still penalise."""
+        cmp = STEDComparator(config=STEDConfig(aliases=(("uid", "user_id"),)))
+        result = cmp.compare({"uid": 1}, {"user_id": 2})
+        # Keys map cleanly, but the differing scalar values must drag the
+        # overall similarity score below 1.0.
+        assert result.key_mappings == {"uid": "user_id"}
+        assert result.similarity_score < 1.0
+
+    def test_alias_unused_keys_remain_unmatched(self) -> None:
+        """Non-aliased keys without partners still appear in unmatched lists."""
+        cmp = STEDComparator(config=STEDConfig(aliases=(("uid", "user_id"),)))
+        result = cmp.compare(
+            {"uid": 1, "leftover_left": "x"},
+            {"user_id": 1, "leftover_right": "y"},
+        )
+        # uid <-> user_id matches; the two leftover keys are different
+        # enough that they should not both be matched together by the
+        # StaticBackend at the default threshold.
+        assert ("uid", "user_id") in result.key_mappings.items()

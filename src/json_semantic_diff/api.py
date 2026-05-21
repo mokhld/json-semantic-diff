@@ -22,6 +22,7 @@ __all__ = [
     "compare_batch",
     "compare_batch_pairs",
     "consistency_score",
+    "format_diff",
     "is_equivalent",
     "similarity_score",
 ]
@@ -189,6 +190,98 @@ def compare_batch_pairs(
         return []
     comparator = STEDComparator(config=config)
     return [comparator.compare(left, right) for left, right in pairs]
+
+
+def format_diff(result: ComparisonResult, indent: int = 2) -> str:
+    """Render a :class:`ComparisonResult` as a human-friendly text report.
+
+    Produces a deterministic side-by-side summary with three optional
+    sections: matched key pairs, keys unmatched on the left, and keys
+    unmatched on the right.  Empty sections are skipped entirely (their
+    headers are not printed) so the output stays tight on identical or
+    near-identical inputs.
+
+    Output shape::
+
+        Similarity: 0.87  (computed in 1.3 ms)
+
+        Matched (3):
+          user_name <-> userName
+          email_address <-> emailAddress
+          age <-> age
+
+        Unmatched in left (2):
+          /timestamp
+          /metadata/version
+
+        Unmatched in right (1):
+          /createdAt
+
+    Determinism: matched pairs are sorted alphabetically by the LEFT
+    label (the last path component of the left key); unmatched paths are
+    sorted alphabetically.  This means two runs over the same inputs
+    always produce byte-identical output (modulo the timing line).
+
+    Args:
+        result: A ``ComparisonResult`` from
+            :func:`compare`.
+        indent: Number of leading spaces on each item line.  Defaults to
+            ``2``.  Negative values are clamped to ``0``.
+
+    Returns:
+        A multi-line string ending without a trailing newline.
+
+    Raises:
+        TypeError: If ``indent`` is not an ``int``.
+    """
+    if not isinstance(indent, int) or isinstance(indent, bool):
+        msg = f"indent must be an int, got {type(indent).__name__}"
+        raise TypeError(msg)
+    pad = " " * max(indent, 0)
+
+    lines: list[str] = [
+        f"Similarity: {result.similarity_score:.2f}  "
+        f"(computed in {result.computation_time_ms:.1f} ms)"
+    ]
+
+    # Matched section: sort by the trailing path segment of the left key
+    # so the section order is independent of insertion order.
+    if result.matched_pairs:
+        sorted_pairs = sorted(
+            result.matched_pairs,
+            key=lambda pair: (_last_segment(pair[0]), _last_segment(pair[1])),
+        )
+        lines.append("")
+        lines.append(f"Matched ({len(sorted_pairs)}):")
+        for left_path, right_path in sorted_pairs:
+            lines.append(
+                f"{pad}{_last_segment(left_path)} <-> {_last_segment(right_path)}"
+            )
+
+    if result.unmatched_left:
+        lines.append("")
+        lines.append(f"Unmatched in left ({len(result.unmatched_left)}):")
+        for path in sorted(result.unmatched_left):
+            lines.append(f"{pad}{path}")
+
+    if result.unmatched_right:
+        lines.append("")
+        lines.append(f"Unmatched in right ({len(result.unmatched_right)}):")
+        for path in sorted(result.unmatched_right):
+            lines.append(f"{pad}{path}")
+
+    return "\n".join(lines)
+
+
+def _last_segment(path: str) -> str:
+    """Return the trailing path segment of a JSON Pointer-style path.
+
+    ``"/users/0/email"`` -> ``"email"``.  Empty / root paths return as-is
+    so the caller can still tell something went wrong.
+    """
+    if not path or path == "/":
+        return path
+    return path.rsplit("/", 1)[-1]
 
 
 def similarity_score(

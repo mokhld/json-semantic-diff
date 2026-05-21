@@ -83,6 +83,23 @@ class STEDConfig:
             of ``0`` would short-circuit at the roots and is rejected).
             Default ``None`` preserves the existing full-recursion
             behaviour.
+        aliases: Tuple of ``(canonical, alias)`` string pairs that the
+            KEY-matching layer must treat as equivalent (similarity
+            ``1.0``).  The relation is symmetric — ``(("uid",
+            "user_id"),)`` makes ``uid`` match ``user_id`` AND
+            ``user_id`` match ``uid``.  Each entry must be a 2-tuple of
+            non-empty strings; otherwise a :class:`ValueError` (or
+            :class:`TypeError` for non-tuple containers) is raised.
+            Default ``()`` (no aliases).
+
+            Aliases short-circuit the backend's similarity verdict for
+            KEY comparison only — they do not affect content-level
+            value comparison.  The check is performed both on raw
+            user-supplied labels and on the backend-normalised forms,
+            so an alias pair ``("id", "user_id")`` correctly matches
+            ``{"id": 1}`` against ``{"user-id": 1}`` (since the
+            backend normalises ``user-id`` to the same canonical form
+            as ``user_id``).
     """
 
     w_s: float = 0.5
@@ -94,6 +111,7 @@ class STEDConfig:
     ignore_paths: tuple[str, ...] = ()
     numeric_tolerance: float = 0.0
     max_depth: int | None = None
+    aliases: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.w_s <= 1.0:
@@ -146,6 +164,16 @@ class STEDConfig:
             if self.max_depth is not None and self.max_depth < 1:
                 msg = f"max_depth must be None or >= 1, got {self.max_depth}"
                 raise ValueError(msg)
+        # aliases: must be a tuple of 2-tuples of non-empty strings.
+        aliases_obj: object = self.aliases
+        if not isinstance(aliases_obj, tuple):
+            msg = (
+                f"aliases must be a tuple of (str, str) pairs, "
+                f"got {type(aliases_obj).__name__}"
+            )
+            raise TypeError(msg)
+        for entry in self.aliases:
+            _validate_alias_pair(entry)
 
 
 def _validate_ignore_path(pattern: object) -> None:
@@ -186,4 +214,35 @@ def _validate_ignore_path(pattern: object) -> None:
     components = pattern.split("/")[1:]
     if any(c == "" for c in components):
         msg = f"ignore_paths entry has empty path component, got {pattern!r}"
+        raise ValueError(msg)
+
+
+def _validate_alias_pair(entry: object) -> None:
+    """Validate a single aliases entry.
+
+    Each entry must be a 2-tuple of non-empty strings.  Anything else —
+    a non-tuple, wrong arity, non-string elements, or empty strings —
+    raises :class:`ValueError`.
+
+    Args:
+        entry: The candidate alias pair.
+
+    Raises:
+        ValueError: If the entry is not a 2-tuple of non-empty strings.
+    """
+    if not isinstance(entry, tuple):
+        msg = (
+            f"aliases entries must be 2-tuples of strings, "
+            f"got {type(entry).__name__}: {entry!r}"
+        )
+        raise ValueError(msg)
+    if len(entry) != 2:
+        msg = f"aliases entry must have exactly 2 elements, got {len(entry)}: {entry!r}"
+        raise ValueError(msg)
+    a, b = entry
+    if not isinstance(a, str) or not isinstance(b, str):
+        msg = f"aliases entry elements must be strings, got {entry!r}"
+        raise ValueError(msg)
+    if not a or not b:
+        msg = f"aliases entry elements must be non-empty strings, got {entry!r}"
         raise ValueError(msg)

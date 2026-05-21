@@ -440,3 +440,96 @@ class TestNumericToleranceAndMaxDepthCombined:
         c1 = STEDConfig(numeric_tolerance=1e-6, max_depth=5)
         c2 = STEDConfig(numeric_tolerance=1e-7, max_depth=5)
         assert c1 != c2
+
+
+# ---------------------------------------------------------------------------
+# aliases field
+# ---------------------------------------------------------------------------
+
+
+class TestSTEDConfigAliasesDefaults:
+    def test_aliases_default_empty_tuple(self) -> None:
+        config = STEDConfig()
+        assert config.aliases == ()
+
+    def test_aliases_empty_tuple_explicit(self) -> None:
+        config = STEDConfig(aliases=())
+        assert config.aliases == ()
+
+
+class TestSTEDConfigAliasesConstruction:
+    def test_single_alias_pair_constructs(self) -> None:
+        config = STEDConfig(aliases=(("uid", "user_id"),))
+        assert config.aliases == (("uid", "user_id"),)
+
+    def test_multiple_alias_pairs_constructs(self) -> None:
+        config = STEDConfig(
+            aliases=(("uid", "user_id"), ("addr", "address"), ("dob", "date_of_birth"))
+        )
+        assert len(config.aliases) == 3
+
+    def test_aliases_frozen(self) -> None:
+        config = STEDConfig(aliases=(("uid", "user_id"),))
+        with pytest.raises(FrozenInstanceError):
+            config.aliases = (("a", "b"),)  # type: ignore[misc]
+
+    def test_aliases_hashable(self) -> None:
+        config = STEDConfig(aliases=(("uid", "user_id"),))
+        assert isinstance(hash(config), int)
+
+    def test_aliases_equality(self) -> None:
+        c1 = STEDConfig(aliases=(("uid", "user_id"),))
+        c2 = STEDConfig(aliases=(("uid", "user_id"),))
+        assert c1 == c2
+
+    def test_aliases_inequality(self) -> None:
+        c1 = STEDConfig(aliases=(("uid", "user_id"),))
+        c2 = STEDConfig(aliases=(("uid", "other_id"),))
+        assert c1 != c2
+
+
+class TestSTEDConfigAliasesValidation:
+    def test_non_tuple_container_raises_typeerror(self) -> None:
+        with pytest.raises(TypeError, match="aliases must be a tuple"):
+            STEDConfig(aliases=[("a", "b")])  # type: ignore[arg-type]
+
+    def test_entry_not_a_tuple_raises_valueerror(self) -> None:
+        with pytest.raises(ValueError, match="aliases entries must be 2-tuples"):
+            STEDConfig(aliases=(["a", "b"],))  # type: ignore[arg-type]
+
+    def test_entry_wrong_arity_one_raises(self) -> None:
+        with pytest.raises(ValueError, match="exactly 2 elements"):
+            STEDConfig(aliases=(("a",),))  # type: ignore[arg-type]
+
+    def test_entry_wrong_arity_three_raises(self) -> None:
+        with pytest.raises(ValueError, match="exactly 2 elements"):
+            STEDConfig(aliases=(("a", "b", "c"),))  # type: ignore[arg-type]
+
+    def test_entry_non_string_element_raises(self) -> None:
+        with pytest.raises(ValueError, match="elements must be strings"):
+            STEDConfig(aliases=(("a", 42),))  # type: ignore[arg-type]
+
+    def test_entry_empty_left_string_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            STEDConfig(aliases=(("", "user_id"),))
+
+    def test_entry_empty_right_string_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            STEDConfig(aliases=(("uid", ""),))
+
+
+class TestSTEDConfigAliasesPreservesOtherFields:
+    def test_aliases_combined_with_existing(self) -> None:
+        config = STEDConfig(
+            ignore_paths=("/timestamp",),
+            aliases=(("uid", "user_id"),),
+            null_equals_missing=True,
+        )
+        assert config.aliases == (("uid", "user_id"),)
+        assert config.ignore_paths == ("/timestamp",)
+        assert config.null_equals_missing is True
+
+    def test_default_aliases_does_not_disturb_array_mode(self) -> None:
+        config = STEDConfig()
+        assert config.aliases == ()
+        assert config.array_comparison_mode == ArrayComparisonMode.ORDERED

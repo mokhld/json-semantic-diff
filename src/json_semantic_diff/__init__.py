@@ -8,6 +8,7 @@ from json_semantic_diff.api import (
     compare_batch,
     compare_batch_pairs,
     consistency_score,
+    format_diff,
     is_equivalent,
     similarity_score,
 )
@@ -24,6 +25,7 @@ __all__: list[str] = [
     "compare_batch",
     "compare_batch_pairs",
     "consistency_score",
+    "format_diff",
     "is_equivalent",
     "similarity_score",
 ]

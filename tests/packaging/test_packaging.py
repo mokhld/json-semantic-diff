@@ -224,6 +224,7 @@ class TestPackageMetadata:
             "compare_batch",
             "compare_batch_pairs",
             "consistency_score",
+            "format_diff",
             "is_equivalent",
             "similarity_score",
         }

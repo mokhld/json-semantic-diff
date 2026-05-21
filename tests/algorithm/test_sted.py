@@ -757,3 +757,106 @@ def test_deeply_nested_self_compare_does_not_recursion_error(
     algo = STEDAlgorithm(backend=backend)
     score = algo.compute(deep, deep_copy)
     assert score == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Memoisation cache (audit finding I1 — Hungarian O(n⁴) worst case)
+# ---------------------------------------------------------------------------
+
+
+class TestDistanceCache:
+    """``_dist_cache`` memoises ``_compute_node_distance`` results.
+
+    The cache lives for the duration of a single ``compute()`` call:
+    cleared at entry, populated during recursion, examined here at exit.
+    """
+
+    def test_cache_populates_during_compute(self, backend: StaticBackend) -> None:
+        """Comparing a tree with repeated subtree shapes fills the cache.
+
+        Hungarian builds an m-by-n cost matrix where each cell calls
+        ``_compute_node_distance``.  On an object with several keys, that
+        function is invoked many times — every invocation lands in the cache.
+        """
+        algo = STEDAlgorithm(backend=backend)
+        a = {f"k{i}": {"nested": {"v": i}} for i in range(8)}
+        b = {f"k{i}": {"nested": {"v": i}} for i in range(8)}
+        algo.compute(a, b)
+        # At minimum, the Hungarian cost matrix at the root produced 8*8=64
+        # cell evaluations, each of which recursed deeper — total cache
+        # entries comfortably exceed the matrix size.
+        assert len(algo._dist_cache) > 0, "cache should be populated after compute()"
+        assert len(algo._dist_cache) >= 64, (
+            f"expected at least 64 cache entries (8x8 cost matrix), "
+            f"got {len(algo._dist_cache)}"
+        )
+
+    def test_cache_cleared_between_compute_calls(self, backend: StaticBackend) -> None:
+        """A fresh ``compute()`` must not see entries from a prior comparison.
+
+        TreeNode identities (``id()``) can be reused by CPython after objects
+        are freed — leaking cache entries across calls would be a correctness
+        bug.  The implementation defensively clears the cache at the top of
+        every ``compute()`` call.
+        """
+        algo = STEDAlgorithm(backend=backend)
+        # First call populates the cache.
+        algo.compute({"a": {"b": 1}}, {"a": {"b": 2}})
+        first_size = len(algo._dist_cache)
+        assert first_size > 0
+
+        # Second call: cache must be cleared at entry.  We can't observe the
+        # "cleared" state mid-call from outside, but we CAN verify that the
+        # second call produces the same score as a freshly-constructed
+        # algorithm (i.e. no stale entries influenced it).
+        algo2 = STEDAlgorithm(backend=backend)
+        s1 = algo.compute({"x": [1, 2, 3]}, {"x": [1, 2, 4]})
+        s2 = algo2.compute({"x": [1, 2, 3]}, {"x": [1, 2, 4]})
+        assert s1 == pytest.approx(s2), (
+            "cache-clearing between compute() calls must yield identical scores"
+        )
+
+    def test_cache_identity_self_comparison_returns_zero(
+        self, backend: StaticBackend
+    ) -> None:
+        """Comparing a node with itself goes through the cache normally.
+
+        ``id(node_a) == id(node_b)`` is a legitimate cache key — the distance
+        is computed once (always 0.0 for any node compared with itself) and
+        reused on subsequent lookups.  This is exercised whenever the same
+        sub-tree appears repeatedly in a single input.
+        """
+        algo = STEDAlgorithm(backend=backend)
+        # Identical inputs produce score 1.0; the cache should hold the
+        # zero-distance results computed along the way.
+        score = algo.compute({"a": [1, 2], "b": [1, 2]}, {"a": [1, 2], "b": [1, 2]})
+        assert score == pytest.approx(1.0)
+        # Sanity: cache was populated (i.e. the path was actually taken).
+        assert len(algo._dist_cache) > 0
+
+    def test_wide_object_completes_quickly(self, backend: StaticBackend) -> None:
+        """Perf smoke test: a wide object compare must finish in well under
+        the worst-case O(n⁴) budget.
+
+        Pre-memoisation, a Hungarian on m=n=120 keys with non-trivial
+        sub-trees could trigger noticeable slowdown when the same pair was
+        re-evaluated across cost-matrix cells.  Loose 5-second budget is
+        intentionally generous — anything close to it suggests an O(n⁴)
+        regression.
+        """
+        import time
+
+        n = 120
+        a = {f"key_{i}": {"nested": {"value": i, "tag": f"t{i}"}} for i in range(n)}
+        b = {f"key_{i}": {"nested": {"value": i, "tag": f"t{i}"}} for i in range(n)}
+
+        algo = STEDAlgorithm(backend=backend)
+        start = time.perf_counter()
+        score = algo.compute(a, b)
+        elapsed = time.perf_counter() - start
+
+        assert score == pytest.approx(1.0)
+        assert elapsed < 5.0, (
+            f"wide-object compare took {elapsed:.2f}s (expected < 5.0s) — "
+            f"possible O(n⁴) regression"
+        )

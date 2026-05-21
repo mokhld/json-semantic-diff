@@ -71,6 +71,14 @@ class STEDAlgorithm:
         self._backend = backend
         self._config = config if config is not None else STEDConfig()
         self._builder = TreeBuilder()
+        # Memoisation cache for `_compute_node_distance`.  Keyed on
+        # ``(id(node_a), id(node_b), depth)``: TreeNode identity is stable for
+        # the duration of a single ``compute()`` call (trees are built once,
+        # then walked read-only), and ``depth`` matters because the
+        # ``max_depth`` cap short-circuits results past the threshold.
+        # Cleared at the top of every ``compute()`` call so cached values from
+        # previous comparisons never leak across calls — see audit finding I1.
+        self._dist_cache: dict[tuple[int, int, int], float] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -86,6 +94,11 @@ class STEDAlgorithm:
         Returns:
             Float in [0.0, 1.0] — similarity score.
         """
+        # Defensive: clear the distance cache so prior comparisons cannot
+        # contaminate this one.  ``id()`` is reused by CPython for freed
+        # objects, so leaking cache entries across ``compute()`` calls would
+        # be a correctness bug rather than a perf nuisance.
+        self._dist_cache.clear()
         root_a = self._builder.build(json_a)
         root_b = self._builder.build(json_b)
         return self._compute_similarity(root_a, root_b)
@@ -175,6 +188,40 @@ class STEDAlgorithm:
 
         Returns:
             Non-negative float distance.
+        """
+        # Memoisation: Hungarian cost-matrix construction (and ordered DP) call
+        # this for every (m * n) child pair, often visiting the same
+        # (node_a, node_b) repeatedly when keys point at structurally identical
+        # subtrees.  Memoising on ``(id(node_a), id(node_b), depth)`` collapses
+        # the O(n⁴) worst case (audit finding I1) without changing semantics.
+        # ``depth`` is part of the key because the ``max_depth`` cap (checked
+        # below) makes the result depth-dependent; including it is always
+        # correct, even when ``max_depth is None``.
+        # Identity shortcut: same object compared with itself is always 0.0.
+        # (Falls through to the cache so callers still benefit from the
+        # uniform lookup path on repeat queries.)
+        cache_key = (id(node_a), id(node_b), depth)
+        cached = self._dist_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        result = self._compute_node_distance_uncached(node_a, node_b, depth)
+        self._dist_cache[cache_key] = result
+        return result
+
+    def _compute_node_distance_uncached(
+        self,
+        node_a: TreeNode,
+        node_b: TreeNode,
+        depth: int,
+    ) -> float:
+        """Uncached body of ``_compute_node_distance``.
+
+        Split out so the public entry point can do a single cache lookup at
+        the top and a single store at the bottom, instead of threading the
+        cache through every early-return branch.  Recursive calls go back
+        through ``_compute_node_distance`` (the cached entry point) so deeper
+        sub-trees still hit the cache.
         """
         # Max-depth cap: short-circuit before any structural work so deep
         # sub-trees do not pay traversal cost.  We charge the standard

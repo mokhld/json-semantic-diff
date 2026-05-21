@@ -26,7 +26,11 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from json_semantic_diff.algorithm.config import STEDConfig
-from json_semantic_diff.algorithm.matcher import hungarian_match
+from json_semantic_diff.algorithm.matcher import (
+    aliased_key_similarity,
+    build_alias_set,
+    hungarian_match,
+)
 from json_semantic_diff.algorithm.sted import STEDAlgorithm
 from json_semantic_diff.backends import StaticBackend
 from json_semantic_diff.cache import EmbeddingCache
@@ -120,6 +124,12 @@ class STEDComparator:
         )
         self._algorithm = STEDAlgorithm(backend=self._backend, config=self._config)
         self._builder = TreeBuilder()
+        # Pre-build the alias lookup once per comparator so the hot loop in
+        # _walk_object_pair pays O(1) per pair instead of re-normalising on
+        # every cell of the cost matrix.
+        self._alias_set: frozenset[frozenset[str]] = build_alias_set(
+            self._config.aliases
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -393,7 +403,12 @@ class STEDComparator:
                 # _backend is always an EmbeddingCache (constructed in __init__),
                 # which guarantees similarity() is available — either delegated
                 # to the wrapped backend or computed via cosine of embed().
-                key_sim = self._backend.similarity(ka.label, kb.label)
+                # aliased_key_similarity short-circuits to 1.0 when (ka, kb)
+                # match a user-declared alias pair; otherwise it delegates
+                # straight through to the cached backend.
+                key_sim = aliased_key_similarity(
+                    self._backend, ka.label, kb.label, self._alias_set
+                )
                 cost_matrix[i, j] = 1.0 - key_sim
 
         row_ind, col_ind = hungarian_match(cost_matrix)

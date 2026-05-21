@@ -406,7 +406,14 @@ def test_fastembed_exposes_model_name() -> None:
 
 def test_backends_init_suppresses_only_modulenotfounderror() -> None:
     """A non-ModuleNotFoundError raised inside an optional backend module must
-    propagate, not be silently swallowed."""
+    propagate, not be silently swallowed.
+
+    Note: the implementation moved from a try/except at import time to PEP
+    562 ``__getattr__`` lazy resolution.  The guarantee under test is the
+    same: real ``ImportError`` (or any other exception) raised inside a
+    backend module surfaces to the caller instead of being hidden behind
+    ``AttributeError``.
+    """
     import inspect
 
     import json_semantic_diff.backends as pkg
@@ -414,10 +421,9 @@ def test_backends_init_suppresses_only_modulenotfounderror() -> None:
     src = inspect.getsource(pkg)
     # The legacy code caught ImportError (parent), which silently hid real bugs
     # like a TypeError-during-import or a transitively-missing package.
-    assert "except ModuleNotFoundError" in src, (
-        "backends/__init__.py must narrow the except to ModuleNotFoundError"
-    )
-    # Defensive check: no bare ImportError fallback.
+    # The new PEP 562 design avoids try/except entirely — errors propagate by
+    # construction — so we assert that no broad ``except ImportError`` swallow
+    # exists.
     assert "except ImportError" not in src, (
         "backends/__init__.py should not catch broad ImportError"
     )
