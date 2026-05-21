@@ -140,6 +140,7 @@ class TestComparisonResultFieldAccess:
             "unmatched_left",
             "unmatched_right",
             "computation_time_ms",
+            "explanation",
         }
 
 

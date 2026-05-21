@@ -38,6 +38,7 @@ openai = ["openai>=1.0", "tenacity>=9.0"]
 langsmith = ["langsmith>=0.1"]
 braintrust = ["braintrust>=0.0.100"]
 weave = ["weave>=0.50"]
+diskcache = ["diskcache>=5.6"]
 all = [
     "fastembed>=0.7,<1.0",
     "openai>=1.0",
@@ -45,6 +46,7 @@ all = [
     "langsmith>=0.1",
     "braintrust>=0.0.100",
     "weave>=0.50",
+    "diskcache>=5.6",
 ]
 
 [project.scripts]

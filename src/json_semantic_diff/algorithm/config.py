@@ -100,6 +100,14 @@ class STEDConfig:
             ``{"id": 1}`` against ``{"user-id": 1}`` (since the
             backend normalises ``user-id`` to the same canonical form
             as ``user_id``).
+        collect_explanation: Opt-in flag enabling per-path explain mode.
+            When True, the algorithm records every non-zero contribution
+            (matched-with-distance, unmatched, value mismatch) during
+            traversal and surfaces them on
+            :attr:`ComparisonResult.explanation`, sorted by contribution
+            descending.  When False (default), the algorithm runs
+            bit-identically to the pre-explain implementation — no
+            extra work is performed on the hot path.  Default ``False``.
     """
 
     w_s: float = 0.5
@@ -112,6 +120,7 @@ class STEDConfig:
     numeric_tolerance: float = 0.0
     max_depth: int | None = None
     aliases: tuple[tuple[str, str], ...] = ()
+    collect_explanation: bool = False
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.w_s <= 1.0:
@@ -174,6 +183,18 @@ class STEDConfig:
             raise TypeError(msg)
         for entry in self.aliases:
             _validate_alias_pair(entry)
+        # collect_explanation: opt-in toggle for explain mode.  Must be a
+        # plain bool — reject ints (including 0/1) so a caller can't
+        # accidentally enable explain mode by passing a truthy non-bool.
+        # Cast to ``object`` first so mypy --strict doesn't flag the
+        # isinstance check as unreachable on the declared ``bool`` type.
+        collect_obj: object = self.collect_explanation
+        if not isinstance(collect_obj, bool):
+            msg = (
+                f"collect_explanation must be a bool, "
+                f"got {type(collect_obj).__name__}: {collect_obj!r}"
+            )
+            raise ValueError(msg)
 
 
 def _validate_ignore_path(pattern: object) -> None:

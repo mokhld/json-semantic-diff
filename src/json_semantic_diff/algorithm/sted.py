@@ -30,6 +30,7 @@ from json_semantic_diff.algorithm.config import ArrayComparisonMode, STEDConfig
 from json_semantic_diff.algorithm.costs import cost_delete, cost_insert, cost_update
 from json_semantic_diff.algorithm.matcher import hungarian_match
 from json_semantic_diff.algorithm.normalizer import normalize_similarity
+from json_semantic_diff.result import NodeContribution
 from json_semantic_diff.tree.builder import TreeBuilder
 from json_semantic_diff.tree.nodes import NodeType, TreeNode, subtree_size
 
@@ -79,6 +80,18 @@ class STEDAlgorithm:
         # Cleared at the top of every ``compute()`` call so cached values from
         # previous comparisons never leak across calls — see audit finding I1.
         self._dist_cache: dict[tuple[int, int, int], float] = {}
+        # Explain-mode buffer.  When ``config.collect_explanation`` is False
+        # (default) this stays ``None`` and every "is the buffer live?" check
+        # is a single ``is None`` test — no per-call list allocation, no
+        # branch on the hot path beyond a None comparison.  When True,
+        # ``compute()`` swaps it to a fresh list at the top and the
+        # recursion appends ``NodeContribution`` entries at meaningful
+        # boundaries.  After ``compute()`` finishes the list is sorted by
+        # contribution descending and exposed via ``last_explanations``.
+        self._explanations: list[NodeContribution] | None = None
+        # Stable handle for callers (comparator) to read after compute().
+        # Starts empty; replaced on each compute() when explain mode is on.
+        self.last_explanations: tuple[NodeContribution, ...] = ()
 
     # ------------------------------------------------------------------
     # Public API
@@ -99,9 +112,80 @@ class STEDAlgorithm:
         # objects, so leaking cache entries across ``compute()`` calls would
         # be a correctness bug rather than a perf nuisance.
         self._dist_cache.clear()
+        # Reset the explain buffer for this run.  When the config flag is
+        # off, the buffer stays ``None`` and the recursion's "buffer alive?"
+        # checks short-circuit immediately — bit-identical behaviour to the
+        # pre-explain implementation.
+        if self._config.collect_explanation:
+            self._explanations = []
+        else:
+            self._explanations = None
+        self.last_explanations = ()
+
         root_a = self._builder.build(json_a)
         root_b = self._builder.build(json_b)
-        return self._compute_similarity(root_a, root_b)
+        score = self._compute_similarity(root_a, root_b)
+
+        # Explain mode: cover the two cases that never reach a child-
+        # matching loop and would otherwise leave the buffer empty:
+        # - scalar-vs-scalar roots that differ, and
+        # - type-mismatched roots (e.g. {} vs []) which are flagged
+        #   maximally dissimilar at the very top of _compute_similarity.
+        if self._explanations is not None and not self._explanations:
+            self._record_root_contribution(root_a, root_b)
+
+        # Sort + freeze the collected explanations for the caller.  Highest
+        # contribution first so users scanning the list see the most
+        # score-moving differences at the top.
+        if self._explanations is not None:
+            self._explanations.sort(key=lambda c: c.contribution, reverse=True)
+            self.last_explanations = tuple(self._explanations)
+        return score
+
+    def _record_root_contribution(self, root_a: TreeNode, root_b: TreeNode) -> None:
+        """Emit a single root-level contribution when no child matching ran.
+
+        Two situations leave the explain buffer empty even though the
+        score < 1.0:
+
+        * Type-mismatched roots — ``_compute_similarity`` returns 0.0
+          straight away.
+        * Scalar-vs-scalar roots whose values differ — the cost is
+          captured in the SCALAR cost_update path, which child matching
+          never invokes.
+
+        Both are reported as a single ``value_mismatch`` at ``"/"`` so
+        users see the top-level explanation instead of an empty list.
+        Identical roots (score 1.0) are skipped — the recursion already
+        confirmed there's nothing to say.
+        """
+        assert self._explanations is not None
+        if root_a.node_type != root_b.node_type:
+            # Use the larger subtree size as the contribution magnitude so
+            # type-flipped roots show up with weight proportional to the
+            # work they replaced.
+            cost = float(max(subtree_size(root_a), subtree_size(root_b)))
+            if cost > 0.0:
+                self._explanations.append(
+                    NodeContribution(
+                        path="/",
+                        contribution=cost,
+                        kind="value_mismatch",
+                        detail=f"type {root_a.node_type} vs {root_b.node_type}",
+                    )
+                )
+            return
+        if root_a.node_type == NodeType.SCALAR:
+            cost = cost_update(root_a, root_b, self._backend, self._config)
+            if cost > 0.0:
+                self._explanations.append(
+                    NodeContribution(
+                        path="/",
+                        contribution=cost,
+                        kind="value_mismatch",
+                        detail="",
+                    )
+                )
 
     # ------------------------------------------------------------------
     # Core similarity dispatcher (normalizes at structural boundaries)
@@ -409,6 +493,74 @@ class STEDAlgorithm:
         )
 
     # ------------------------------------------------------------------
+    # Explain-mode helpers
+    # ------------------------------------------------------------------
+
+    def _record_pair_contribution(
+        self,
+        node_a: TreeNode,
+        node_b: TreeNode,
+        cost: float,
+    ) -> None:
+        """Append a single matched-pair contribution to the explain buffer.
+
+        Classifies the pair:
+
+        * Both SCALAR (or one side wraps a SCALAR via KEY/ELEMENT) with
+          non-zero cost → ``value_mismatch`` (the values differ at this
+          location).
+        * Anything else with non-zero cost → ``matched`` (a matched
+          structural pair that still carries some distance because their
+          sub-trees differ).
+
+        The buffer must already be live (caller's responsibility).  ``cost``
+        is the raw per-pair distance, identical to the one summed into the
+        final score.
+        """
+        assert self._explanations is not None  # invariant from caller
+        # Resolve the "leaf" each side reduces to so we can detect a pure
+        # value mismatch.  KEY/ELEMENT nodes are transparent — their value
+        # child carries the actual scalar (or sub-tree).
+        leaf_a = self._scalar_leaf(node_a)
+        leaf_b = self._scalar_leaf(node_b)
+        if (
+            leaf_a is not None
+            and leaf_b is not None
+            and leaf_a.node_type == NodeType.SCALAR
+            and leaf_b.node_type == NodeType.SCALAR
+        ):
+            kind = "value_mismatch"
+        else:
+            kind = "matched"
+        # Use the left-side path when available; falls back to the right.
+        # Both should be non-empty for any non-root node.
+        path = node_a.path or node_b.path or "/"
+        self._explanations.append(
+            NodeContribution(
+                path=path,
+                contribution=cost,
+                kind=kind,
+                detail="",
+            )
+        )
+
+    @staticmethod
+    def _scalar_leaf(node: TreeNode) -> TreeNode | None:
+        """Return the SCALAR descendant of a transparent wrapper, or None.
+
+        KEY and ELEMENT nodes wrap exactly one child.  Step through them
+        once: if the wrapped child is a SCALAR, return it; otherwise
+        return None so callers fall back to the structural-match branch.
+        """
+        if node.node_type == NodeType.SCALAR:
+            return node
+        if node.node_type in (NodeType.KEY, NodeType.ELEMENT) and node.children:
+            child = node.children[0]
+            if child.node_type == NodeType.SCALAR:
+                return child
+        return None
+
+    # ------------------------------------------------------------------
     # Child matching strategies
     # ------------------------------------------------------------------
 
@@ -463,6 +615,38 @@ class STEDAlgorithm:
             cost_insert(children_b[j]) for j in range(n) if j not in matched_right
         )
 
+        # Explain mode: record contributions for the winning matches and
+        # for the unmatched leftovers.  Cheap when off (single ``is None``
+        # check) and never re-runs the cost matrix — we read directly off
+        # the assignment computed above.
+        if self._explanations is not None:
+            for r, c in zip(row_ind.tolist(), col_ind.tolist(), strict=True):
+                pair_cost = float(cost_matrix[r, c])
+                if pair_cost > 0.0:
+                    self._record_pair_contribution(
+                        children_a[r], children_b[c], pair_cost
+                    )
+            for i in range(m):
+                if i not in matched_left:
+                    self._explanations.append(
+                        NodeContribution(
+                            path=children_a[i].path or "/",
+                            contribution=cost_delete(children_a[i]),
+                            kind="unmatched_left",
+                            detail=children_a[i].raw_label or children_a[i].label,
+                        )
+                    )
+            for j in range(n):
+                if j not in matched_right:
+                    self._explanations.append(
+                        NodeContribution(
+                            path=children_b[j].path or "/",
+                            contribution=cost_insert(children_b[j]),
+                            kind="unmatched_right",
+                            detail=children_b[j].raw_label or children_b[j].label,
+                        )
+                    )
+
         return matched_cost + unmatched_left_cost + unmatched_right_cost
 
     def _match_children_sequence(
@@ -492,6 +676,15 @@ class STEDAlgorithm:
 
         # dp[i][j] = min cost to align children_a[:i] with children_b[:j]
         dp = [[0.0] * (n + 1) for _ in range(m + 1)]
+        # Substitution-cost mirror used by the explain-mode backtrack so we
+        # don't have to call ``_compute_node_distance`` a second time
+        # (it's cached, but skipping the call entirely keeps backtracking
+        # branch-free).  ``None`` when explain mode is off.
+        sub_costs: list[list[float]] | None = (
+            [[0.0] * (n + 1) for _ in range(m + 1)]
+            if self._explanations is not None
+            else None
+        )
 
         # Base cases: aligning with empty sequence
         for i in range(1, m + 1):
@@ -505,13 +698,79 @@ class STEDAlgorithm:
                 sub_cost = self._compute_node_distance(
                     children_a[i - 1], children_b[j - 1], depth
                 )
+                if sub_costs is not None:
+                    sub_costs[i][j] = sub_cost
                 dp[i][j] = min(
                     dp[i - 1][j] + cost_delete(children_a[i - 1]),  # delete
                     dp[i][j - 1] + cost_insert(children_b[j - 1]),  # insert
                     dp[i - 1][j - 1] + sub_cost,  # substitute
                 )
 
+        # Explain mode: backtrack the optimal alignment and record per-
+        # position contributions (substitution, deletion, insertion).
+        # Cheap when off — guarded by an ``is None`` check.
+        if self._explanations is not None and sub_costs is not None:
+            self._backtrack_sequence(children_a, children_b, dp, sub_costs)
+
         return dp[m][n]
+
+    def _backtrack_sequence(
+        self,
+        children_a: list[TreeNode],
+        children_b: list[TreeNode],
+        dp: list[list[float]],
+        sub_costs: list[list[float]],
+    ) -> None:
+        """Walk the DP table back along the chosen alignment edges.
+
+        Emits one :class:`NodeContribution` per non-zero edit on the
+        winning path.  Called only when explain mode is on; the buffer is
+        guaranteed live by the caller, so we don't re-check
+        ``self._explanations is not None`` here.
+
+        Tie-breaking matches the forward pass's ``min`` order: prefer the
+        substitute branch when costs tie, then delete, then insert.  This
+        keeps the recorded alignment deterministic across runs.
+        """
+        assert self._explanations is not None  # invariant from caller
+        i = len(children_a)
+        j = len(children_b)
+        while i > 0 or j > 0:
+            if i > 0 and j > 0:
+                sub = dp[i - 1][j - 1] + sub_costs[i][j]
+                if dp[i][j] == sub:
+                    cost = sub_costs[i][j]
+                    if cost > 0.0:
+                        self._record_pair_contribution(
+                            children_a[i - 1], children_b[j - 1], cost
+                        )
+                    i -= 1
+                    j -= 1
+                    continue
+            if i > 0:
+                delete = dp[i - 1][j] + cost_delete(children_a[i - 1])
+                if dp[i][j] == delete:
+                    self._explanations.append(
+                        NodeContribution(
+                            path=children_a[i - 1].path or "/",
+                            contribution=cost_delete(children_a[i - 1]),
+                            kind="unmatched_left",
+                            detail=children_a[i - 1].raw_label
+                            or children_a[i - 1].label,
+                        )
+                    )
+                    i -= 1
+                    continue
+            if j > 0:
+                self._explanations.append(
+                    NodeContribution(
+                        path=children_b[j - 1].path or "/",
+                        contribution=cost_insert(children_b[j - 1]),
+                        kind="unmatched_right",
+                        detail=children_b[j - 1].raw_label or children_b[j - 1].label,
+                    )
+                )
+                j -= 1
 
     # ------------------------------------------------------------------
     # Array mode resolution

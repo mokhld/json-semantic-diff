@@ -192,6 +192,16 @@ class STEDComparator:
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
+        # Explain mode: when ``collect_explanation`` is on, the algorithm
+        # has populated ``last_explanations`` (sorted descending) inside
+        # ``compute()``.  When off, ``last_explanations`` is the empty
+        # tuple — the default ComparisonResult.explanation value.
+        explanation = (
+            self._algorithm.last_explanations
+            if self._config.collect_explanation
+            else ()
+        )
+
         return ComparisonResult(
             similarity_score=score,
             matched_pairs=tuple(matched_pairs),
@@ -199,6 +209,7 @@ class STEDComparator:
             unmatched_left=tuple(unmatched_left),
             unmatched_right=tuple(unmatched_right),
             computation_time_ms=elapsed_ms,
+            explanation=explanation,
         )
 
     # ------------------------------------------------------------------

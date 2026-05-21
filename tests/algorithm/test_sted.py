@@ -860,3 +860,153 @@ class TestDistanceCache:
             f"wide-object compare took {elapsed:.2f}s (expected < 5.0s) — "
             f"possible O(n⁴) regression"
         )
+
+
+# ---------------------------------------------------------------------------
+# Explain mode (F1): per-path contributions
+# ---------------------------------------------------------------------------
+
+
+class TestExplainModeDisabled:
+    """When ``collect_explanation`` is False (default), scores must be
+    bit-identical to the pre-explain behaviour and ``last_explanations``
+    stays the empty tuple."""
+
+    def test_scores_unchanged_for_identical_inputs(
+        self, backend: StaticBackend
+    ) -> None:
+        algo = STEDAlgorithm(backend=backend)
+        score = algo.compute({"a": 1, "b": [1, 2]}, {"a": 1, "b": [1, 2]})
+        assert score == pytest.approx(1.0)
+        assert algo.last_explanations == ()
+
+    def test_scores_unchanged_for_divergent_inputs(
+        self, backend: StaticBackend
+    ) -> None:
+        algo_off = STEDAlgorithm(backend=backend)
+        algo_on = STEDAlgorithm(
+            backend=backend,
+            config=STEDConfig(collect_explanation=True),
+        )
+        left = {"a": 1, "b": 2, "c": 3}
+        right = {"a": 9, "b": 2, "d": 4}
+        score_off = algo_off.compute(left, right)
+        score_on = algo_on.compute(left, right)
+        assert score_off == pytest.approx(score_on)
+        # Default config: explanations are empty.
+        assert algo_off.last_explanations == ()
+
+    def test_last_explanations_is_empty_tuple_by_default(
+        self, backend: StaticBackend
+    ) -> None:
+        algo = STEDAlgorithm(backend=backend)
+        algo.compute({"a": 1}, {"a": 2})
+        assert algo.last_explanations == ()
+
+
+class TestExplainModeEnabled:
+    """When ``collect_explanation`` is True, contributions populate
+    ``last_explanations`` for any non-identical input."""
+
+    @pytest.fixture
+    def algo_explain(self, backend: StaticBackend) -> STEDAlgorithm:
+        return STEDAlgorithm(
+            backend=backend,
+            config=STEDConfig(collect_explanation=True),
+        )
+
+    def test_identical_inputs_yield_empty_explanation(
+        self, algo_explain: STEDAlgorithm
+    ) -> None:
+        algo_explain.compute({"a": 1, "b": "x"}, {"a": 1, "b": "x"})
+        assert algo_explain.last_explanations == ()
+
+    def test_value_mismatch_produces_contribution(
+        self, algo_explain: STEDAlgorithm
+    ) -> None:
+        algo_explain.compute({"a": 1}, {"a": 2})
+        explanations = algo_explain.last_explanations
+        assert len(explanations) >= 1
+        # The matched-key pair carries a non-zero distance — a value mismatch.
+        kinds = {c.kind for c in explanations}
+        assert "value_mismatch" in kinds
+        # Path should be valid (non-empty, slash-rooted).
+        for c in explanations:
+            assert c.path.startswith("/")
+            assert c.contribution > 0.0
+
+    def test_unmatched_left_produces_contribution(
+        self, algo_explain: STEDAlgorithm
+    ) -> None:
+        algo_explain.compute({"a": 1, "extra": 2}, {"a": 1})
+        kinds = {c.kind for c in algo_explain.last_explanations}
+        assert "unmatched_left" in kinds
+
+    def test_unmatched_right_produces_contribution(
+        self, algo_explain: STEDAlgorithm
+    ) -> None:
+        algo_explain.compute({"a": 1}, {"a": 1, "extra": 2})
+        kinds = {c.kind for c in algo_explain.last_explanations}
+        assert "unmatched_right" in kinds
+
+    def test_contributions_sorted_descending(self, algo_explain: STEDAlgorithm) -> None:
+        left = {"a": "x", "b": "y", "c": "z", "extra1": 1, "extra2": 2}
+        right = {"a": "X", "b": "Y", "c": "Z", "different": 99}
+        algo_explain.compute(left, right)
+        contributions = [c.contribution for c in algo_explain.last_explanations]
+        assert contributions == sorted(contributions, reverse=True)
+
+    def test_all_contributions_have_valid_kind(
+        self, algo_explain: STEDAlgorithm
+    ) -> None:
+        valid_kinds = {"matched", "unmatched_left", "unmatched_right", "value_mismatch"}
+        left = {"a": 1, "b": [1, 2, 3], "c": "old"}
+        right = {"a": 2, "b": [1, 2, 4], "c": "new", "d": "extra"}
+        algo_explain.compute(left, right)
+        for c in algo_explain.last_explanations:
+            assert c.kind in valid_kinds
+            # Every contribution should be a finite, positive float.
+            assert c.contribution > 0.0
+            assert c.contribution < float("inf")
+            # Path must be a JSON Pointer rooted at /.
+            assert c.path.startswith("/")
+
+    def test_scalar_root_mismatch_emits_root_contribution(
+        self, algo_explain: STEDAlgorithm
+    ) -> None:
+        algo_explain.compute("hello", "world")
+        explanations = algo_explain.last_explanations
+        assert len(explanations) == 1
+        assert explanations[0].path == "/"
+        assert explanations[0].kind == "value_mismatch"
+        assert explanations[0].contribution > 0.0
+
+    def test_type_mismatched_roots_emit_contribution(
+        self, algo_explain: STEDAlgorithm
+    ) -> None:
+        algo_explain.compute({"a": 1}, [1, 2])
+        explanations = algo_explain.last_explanations
+        assert len(explanations) >= 1
+        assert explanations[0].path == "/"
+        assert "type" in explanations[0].detail
+
+    def test_array_value_mismatch_records_element_path(
+        self, algo_explain: STEDAlgorithm
+    ) -> None:
+        algo_explain.compute([1, 2, 3], [1, 9, 3])
+        # The middle element differs; expect a contribution on that index.
+        paths = [c.path for c in algo_explain.last_explanations]
+        assert any("1" in p.split("/") for p in paths)
+
+    def test_explain_does_not_change_score(self, backend: StaticBackend) -> None:
+        """Enabling explain mode must not perturb the numeric score."""
+        left = {"x": [1, 2, {"a": "old"}], "y": "v"}
+        right = {"x": [1, 2, {"a": "new"}], "y": "v"}
+        algo_off = STEDAlgorithm(backend=backend)
+        algo_on = STEDAlgorithm(
+            backend=backend,
+            config=STEDConfig(collect_explanation=True),
+        )
+        assert algo_off.compute(left, right) == pytest.approx(
+            algo_on.compute(left, right)
+        )
