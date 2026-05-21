@@ -123,7 +123,7 @@ class PersistentEmbeddingCache:
         # rather than ModuleNotFoundError so a broken install (partial
         # uninstall, mis-pickled .pth) still surfaces our friendly hint.
         try:
-            import diskcache  # type: ignore[import-untyped]
+            import diskcache
         except ImportError as exc:  # pragma: no cover - exercised via monkeypatch
             raise ImportError(_DISKCACHE_INSTALL_HINT) from exc
 

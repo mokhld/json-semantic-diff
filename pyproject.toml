@@ -129,6 +129,10 @@ ignore_missing_imports = true
 module = "weave"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "diskcache"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
