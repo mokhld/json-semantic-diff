@@ -7,6 +7,8 @@ empty containers, mixed arrays, and TypeError on invalid input.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from json_semantic_diff.tree.builder import TreeBuilder
@@ -473,6 +475,94 @@ class TestTypeError:
     def test_bytes_raises_type_error(self, builder: TreeBuilder) -> None:
         with pytest.raises(TypeError, match="Unsupported JSON value type"):
             builder.build(b"hello")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Cycle detection (M11): self-referencing containers raise ValueError
+# ---------------------------------------------------------------------------
+
+
+class TestCycleDetection:
+    """Cyclic Python structures must raise ValueError, not recurse forever."""
+
+    def test_dict_self_reference(self, builder: TreeBuilder) -> None:
+        a: dict[str, Any] = {}
+        a["self"] = a
+        with pytest.raises(ValueError, match="Cyclic structure detected"):
+            builder.build(a)
+
+    def test_list_self_reference(self, builder: TreeBuilder) -> None:
+        lst: list[Any] = []
+        lst.append(lst)
+        with pytest.raises(ValueError, match="Cyclic structure detected"):
+            builder.build(lst)
+
+    def test_dict_indirect_cycle(self, builder: TreeBuilder) -> None:
+        """a -> b -> a forms a two-step cycle."""
+        a: dict[str, Any] = {}
+        b: dict[str, Any] = {"back": a}
+        a["forward"] = b
+        with pytest.raises(ValueError, match="Cyclic structure detected"):
+            builder.build(a)
+
+    def test_list_dict_mixed_cycle(self, builder: TreeBuilder) -> None:
+        a: dict[str, Any] = {}
+        lst: list[Any] = [a]
+        a["lst"] = lst
+        with pytest.raises(ValueError, match="Cyclic structure detected"):
+            builder.build(a)
+
+    def test_repeated_non_cyclic_subtree_does_not_raise(
+        self, builder: TreeBuilder
+    ) -> None:
+        """A DAG that re-uses the same subtree twice is NOT a cycle —
+        both references appear at different points but neither is on the
+        active recursion stack when the other is processed."""
+        shared = {"x": 1}
+        doc = {"a": shared, "b": shared}
+        # Should not raise; both branches build the same subtree shape
+        tree = builder.build(doc)
+        assert tree.node_type == NodeType.OBJECT
+        assert len(tree.children) == 2
+
+
+# ---------------------------------------------------------------------------
+# Non-string keys (M12): JSON spec requires string keys
+# ---------------------------------------------------------------------------
+
+
+class TestNonStringKeys:
+    """Python dicts allow any hashable key, but JSON requires strings.
+
+    Reject explicitly with TypeError rather than silently corrupting paths
+    or crashing inside the regex normalizer.
+    """
+
+    def test_int_key_raises_type_error(self, builder: TreeBuilder) -> None:
+        with pytest.raises(TypeError, match="JSON object keys must be strings"):
+            builder.build({1: "value"})
+
+    def test_float_key_raises_type_error(self, builder: TreeBuilder) -> None:
+        with pytest.raises(TypeError, match="JSON object keys must be strings"):
+            builder.build({1.5: "value"})
+
+    def test_tuple_key_raises_type_error(self, builder: TreeBuilder) -> None:
+        with pytest.raises(TypeError, match="JSON object keys must be strings"):
+            builder.build({(1, 2): "value"})
+
+    def test_none_key_raises_type_error(self, builder: TreeBuilder) -> None:
+        with pytest.raises(TypeError, match="JSON object keys must be strings"):
+            builder.build({None: "value"})  # type: ignore[dict-item]
+
+    def test_bool_key_raises_type_error(self, builder: TreeBuilder) -> None:
+        """``True`` is hashable and dict-compatible but not a JSON string key."""
+        with pytest.raises(TypeError, match="JSON object keys must be strings"):
+            builder.build({True: "value"})  # type: ignore[dict-item]
+
+    def test_nested_int_key_reports_inner_path(self, builder: TreeBuilder) -> None:
+        """Nested non-string key surfaces with the parent path in the error."""
+        with pytest.raises(TypeError, match="JSON object keys must be strings"):
+            builder.build({"outer": {2: "v"}})
 
 
 # ---------------------------------------------------------------------------

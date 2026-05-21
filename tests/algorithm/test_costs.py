@@ -433,3 +433,97 @@ class TestCostUpdateRange:
         b = make_key_node("b")
         result = cost_update(a, b, backend, default_config)
         assert isinstance(result, float)
+
+
+# ---------------------------------------------------------------------------
+# cost_update — bool vs int distinction (H2 / M7)
+# ---------------------------------------------------------------------------
+
+
+class TestCostUpdateBoolVsInt:
+    """Bool MUST NOT collapse to int 0/1.  Policy: bool is its own type."""
+
+    def test_true_vs_int_one_is_distance_one(
+        self, backend: StaticBackend, default_config: STEDConfig
+    ) -> None:
+        """True and 1 are distinct SCALAR types — content_distance must be 1.0.
+
+        Bug guard for H2: ``True == 1`` is True in Python, so a naive ``==``
+        check would collapse the content distance to 0.0.  We must keep
+        bool and int as separate domains.
+        """
+        a = make_scalar_node(True)
+        b = make_scalar_node(1)
+        # gamma_struct = 0 (both SCALAR), gamma_content must be 1.0
+        # cost = 0.5 * 0 + 0.5 * 1.0 = 0.5
+        result = cost_update(a, b, backend, default_config)
+        assert result == pytest.approx(0.5)
+
+    def test_false_vs_int_zero_is_distance_one(
+        self, backend: StaticBackend, default_config: STEDConfig
+    ) -> None:
+        a = make_scalar_node(False)
+        b = make_scalar_node(0)
+        result = cost_update(a, b, backend, default_config)
+        assert result == pytest.approx(0.5)
+
+    def test_true_vs_true_is_zero(
+        self, backend: StaticBackend, default_config: STEDConfig
+    ) -> None:
+        a = make_scalar_node(True)
+        b = make_scalar_node(True)
+        assert cost_update(a, b, backend, default_config) == pytest.approx(0.0)
+
+    def test_false_vs_true_is_distance_one(
+        self, backend: StaticBackend, default_config: STEDConfig
+    ) -> None:
+        a = make_scalar_node(False)
+        b = make_scalar_node(True)
+        assert cost_update(a, b, backend, default_config) == pytest.approx(0.5)
+
+    def test_true_vs_string_one_not_coerced(self, backend: StaticBackend) -> None:
+        """Even with type_coercion=True, bool is NOT coerced into '1' / '0'."""
+        config = STEDConfig(type_coercion=True)
+        a = make_scalar_node(True)
+        b = make_scalar_node("1")
+        result = cost_update(a, b, backend, config)
+        # Bool excludes coercion; structural=0 (both SCALAR), content=1
+        assert result == pytest.approx(0.5)
+
+    def test_true_vs_float_one_not_coerced(self, backend: StaticBackend) -> None:
+        config = STEDConfig(type_coercion=True)
+        a = make_scalar_node(True)
+        b = make_scalar_node(1.0)
+        # Bool excludes coercion -> content distance 1.0
+        result = cost_update(a, b, backend, config)
+        assert result == pytest.approx(0.5)
+
+    def test_int_vs_float_same_value_zero_distance(
+        self, backend: StaticBackend, default_config: STEDConfig
+    ) -> None:
+        """5 == 5.0 (numeric equivalence, no type-coercion needed)."""
+        a = make_scalar_node(5)
+        b = make_scalar_node(5.0)
+        # int/float compatible -> distance 0
+        result = cost_update(a, b, backend, default_config)
+        assert result == pytest.approx(0.0)
+
+    def test_string_vs_int_coercion_path_still_works(
+        self, backend: StaticBackend
+    ) -> None:
+        """type_coercion=True still coerces '5' <-> 5 (M7 policy preserved)."""
+        config = STEDConfig(type_coercion=True)
+        a = make_scalar_node("5")
+        b = make_scalar_node(5)
+        result = cost_update(a, b, backend, config)
+        # Coerced via float() — both equal 5.0 — content distance 0
+        assert result == pytest.approx(0.0)
+
+    def test_string_vs_int_no_coercion_default(
+        self, backend: StaticBackend, default_config: STEDConfig
+    ) -> None:
+        """Without type_coercion, '5' and 5 are different."""
+        a = make_scalar_node("5")
+        b = make_scalar_node(5)
+        result = cost_update(a, b, backend, default_config)
+        assert result == pytest.approx(0.5)

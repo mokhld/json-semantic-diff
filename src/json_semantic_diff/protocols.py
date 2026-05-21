@@ -2,7 +2,8 @@
 
 Defines the structural interface all embedding backends must satisfy.
 Users can plug in custom backends without inheriting from any base class —
-any class with a conformant ``embed`` method passes ``isinstance`` checks.
+any class with conformant ``embed`` and ``similarity`` methods passes
+``isinstance`` checks.
 
 Example::
 
@@ -13,6 +14,10 @@ Example::
         def embed(self, strings: list[str]) -> np.ndarray:
             # Return shape (N, D) float64 embedding matrix
             return np.zeros((len(strings), 768))
+
+        def similarity(self, a: str, b: str) -> float:
+            # Return a float in [0.0, 1.0]
+            return 1.0 if a == b else 0.0
 
     assert isinstance(MyBackend(), EmbeddingBackend)  # True — structural conformance
 """
@@ -29,14 +34,27 @@ if TYPE_CHECKING:
 class EmbeddingBackend(Protocol):
     """Structural protocol for embedding backends.
 
-    Any class implementing ``embed(self, strings: list[str]) -> np.ndarray``
-    satisfies this protocol at runtime — no inheritance required.
+    Any class implementing both ``embed(self, strings: list[str]) -> np.ndarray``
+    and ``similarity(self, a: str, b: str) -> float`` satisfies this protocol at
+    runtime — no inheritance required.
 
     The ``embed`` method must:
     - Accept a list of strings as input.
     - Return a 2-D numpy array of shape ``(len(strings), D)`` for some embedding
       dimension ``D >= 1``.
     - Return dtype ``float64`` (or compatible floating-point dtype).
+
+    The ``similarity`` method must:
+    - Accept two strings.
+    - Return a float in ``[0.0, 1.0]`` where ``1.0`` means identical and ``0.0``
+      means completely dissimilar.
+
+    Note:
+        Backends that only know how to ``embed`` can still satisfy this protocol
+        by wrapping themselves in :class:`json_semantic_diff.cache.EmbeddingCache`,
+        which provides a cosine-based ``similarity`` fallback.
     """
 
     def embed(self, strings: list[str]) -> np.ndarray: ...
+
+    def similarity(self, a: str, b: str) -> float: ...

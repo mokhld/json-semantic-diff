@@ -52,6 +52,12 @@ class TreeBuilder:
     def build(self, value: JsonValue, path: str = "") -> TreeNode:
         """Convert a JSON value to a TreeNode tree.
 
+        Cycle detection: a ``visited`` set of ``id(container)`` values
+        tracks every dict / list seen on the current call stack so that a
+        self-referencing Python object (e.g. ``a = {}; a["self"] = a``)
+        raises ``ValueError`` instead of recursing forever.  Scalars do
+        not participate — only containers (dict/list) can form a cycle.
+
         Args:
             value: Any valid JSON value (dict, list, str, int, float, bool, None).
             path:  JSON Pointer path to this node. Defaults to "" (root).
@@ -60,8 +66,19 @@ class TreeBuilder:
             A TreeNode tree rooted at the appropriate node type.
 
         Raises:
-            TypeError: If value is not a valid JSON type.
+            TypeError: If value is not a valid JSON type, or a dict contains
+                a non-string key (JSON object keys must be strings).
+            ValueError: If a cyclic container reference is detected.
         """
+        return self._build(value, path, visited=set())
+
+    def _build(
+        self,
+        value: Any,
+        path: str,
+        visited: set[int],
+    ) -> TreeNode:
+        """Recursive entry point that threads the ``visited`` cycle-detection set."""
         # CRITICAL: bool MUST be checked before int — bool subclasses int in Python
         if isinstance(value, bool):
             label = "true" if value else "false"
@@ -70,10 +87,26 @@ class TreeBuilder:
             )
 
         if isinstance(value, dict):
-            return self._build_object(value, path)
+            obj_id = id(value)
+            if obj_id in visited:
+                msg = f"Cyclic structure detected at path: {path or '/'!r}"
+                raise ValueError(msg)
+            visited.add(obj_id)
+            try:
+                return self._build_object(value, path, visited)
+            finally:
+                visited.discard(obj_id)
 
         if isinstance(value, list):
-            return self._build_array(value, path)
+            list_id = id(value)
+            if list_id in visited:
+                msg = f"Cyclic structure detected at path: {path or '/'!r}"
+                raise ValueError(msg)
+            visited.add(list_id)
+            try:
+                return self._build_array(value, path, visited)
+            finally:
+                visited.discard(list_id)
 
         if isinstance(value, (str, int, float)):
             return TreeNode(
@@ -87,19 +120,39 @@ class TreeBuilder:
 
         raise TypeError(f"Unsupported JSON value type: {type(value)!r}")
 
-    def _build_object(self, obj: dict[str, Any], path: str) -> TreeNode:
+    def _build_object(
+        self,
+        obj: dict[Any, Any],
+        path: str,
+        visited: set[int],
+    ) -> TreeNode:
         """Build an OBJECT node with KEY->value child pairs.
 
         Args:
-            obj:  The JSON object (Python dict).
-            path: JSON Pointer path to this object node.
+            obj:     The JSON object (Python dict).
+            path:    JSON Pointer path to this object node.
+            visited: Set of ``id()`` values for containers currently on the
+                     recursion stack (cycle detection).
 
         Returns:
             An OBJECT TreeNode whose children are KEY nodes.
+
+        Raises:
+            TypeError: If any key is not a string — JSON object keys must be strings.
         """
         object_node = TreeNode(node_type=NodeType.OBJECT, label="", path=path)
 
         for key, val in obj.items():
+            # JSON object keys MUST be strings.  Python dicts allow any
+            # hashable key, but treating ``{1: "a"}`` as JSON silently is a
+            # latent bug — downstream regex normalisation crashes on
+            # non-strings.  Reject explicitly with a descriptive error.
+            if not isinstance(key, str):
+                msg = (
+                    f"JSON object keys must be strings; "
+                    f"got {type(key).__name__!r} at path {path or '/'!r}"
+                )
+                raise TypeError(msg)
             key_path = f"{path}/{key}"
             key_node = TreeNode(
                 node_type=NodeType.KEY,
@@ -107,18 +160,25 @@ class TreeBuilder:
                 path=key_path,
                 raw_label=key,
             )
-            child = self.build(val, path=key_path)
+            child = self._build(val, path=key_path, visited=visited)
             key_node.children.append(child)
             object_node.children.append(key_node)
 
         return object_node
 
-    def _build_array(self, arr: list[Any], path: str) -> TreeNode:
+    def _build_array(
+        self,
+        arr: list[Any],
+        path: str,
+        visited: set[int],
+    ) -> TreeNode:
         """Build an ARRAY node with ELEMENT->value child pairs.
 
         Args:
-            arr:  The JSON array (Python list).
-            path: JSON Pointer path to this array node.
+            arr:     The JSON array (Python list).
+            path:    JSON Pointer path to this array node.
+            visited: Set of ``id()`` values for containers currently on the
+                     recursion stack (cycle detection).
 
         Returns:
             An ARRAY TreeNode whose children are ELEMENT nodes indexed by position.
@@ -132,7 +192,7 @@ class TreeBuilder:
                 label=str(idx),
                 path=elem_path,
             )
-            child = self.build(item, path=elem_path)
+            child = self._build(item, path=elem_path, visited=visited)
             elem_node.children.append(child)
             array_node.children.append(elem_node)
 

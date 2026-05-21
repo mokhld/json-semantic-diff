@@ -33,6 +33,11 @@ from typing import Any
 
 import numpy as np
 
+# OpenAI embeddings API hard limit on inputs per request (as of SDK v1.x).
+# Requests larger than this are 400'd by the server.  We chunk client-side
+# to keep callers from having to think about it.
+_OPENAI_MAX_BATCH_SIZE = 2048
+
 
 class OpenAIBackend:
     """OpenAI embedding backend using ``text-embedding-3-small``.
@@ -52,6 +57,15 @@ class OpenAIBackend:
         model_name: OpenAI embedding model identifier.  Defaults to
             ``"text-embedding-3-small"`` (1536-dim, best quality/cost trade-off
             per OpenAI recommendation).
+        base_url: Optional override for the API endpoint.  Forwarded to the
+            ``OpenAI`` client — enables Azure OpenAI, LiteLLM, vLLM, or any
+            OpenAI-compatible server.  ``None`` uses the SDK default
+            (``https://api.openai.com/v1``).
+        timeout: Optional per-request timeout in seconds.  Forwarded to the
+            ``OpenAI`` client.  ``None`` uses the SDK default.
+        organization: Optional ``OpenAI-Organization`` header value.
+            Forwarded to the ``OpenAI`` client.  ``None`` uses the SDK
+            default (reads ``OPENAI_ORG_ID`` env var if set).
 
     Raises:
         ImportError: If ``openai`` or ``tenacity`` is not installed.  The
@@ -61,9 +75,42 @@ class OpenAIBackend:
     def __init__(
         self,
         model_name: str = "text-embedding-3-small",
+        base_url: str | None = None,
+        timeout: float | None = None,
+        organization: str | None = None,
     ) -> None:
         try:
-            from openai import OpenAI, RateLimitError
+            from openai import OpenAI
+        except ImportError as exc:
+            raise ImportError(
+                "openai and tenacity are required for OpenAIBackend. "
+                "Install with: pip install json-semantic-diff[openai]"
+            ) from exc
+
+        # Resolve retryable error classes.  Older SDKs (~1.0) may only expose
+        # ``APIError`` / ``RateLimitError`` — fall back gracefully when the
+        # narrower classes are missing.
+        try:
+            from openai import (
+                APIConnectionError,
+                APITimeoutError,
+                InternalServerError,
+                RateLimitError,
+            )
+
+            retryable: tuple[type[BaseException], ...] = (
+                RateLimitError,
+                APIConnectionError,
+                APITimeoutError,
+                InternalServerError,
+            )
+        except ImportError:
+            # SDK too old for granular classes — retry on the superclass.
+            from openai import APIError
+
+            retryable = (APIError,)
+
+        try:
             from tenacity import (
                 retry,
                 retry_if_exception_type,
@@ -82,13 +129,20 @@ class OpenAIBackend:
         # up to 6 (tenacity) * 3 (SDK) = 18 HTTP calls per embed().
         # Use Any annotation: openai is a lazy import, not available at
         # class definition time for type resolution.
-        self._client: Any = OpenAI(max_retries=0)
+        client_kwargs: dict[str, Any] = {"max_retries": 0}
+        if base_url is not None:
+            client_kwargs["base_url"] = base_url
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        if organization is not None:
+            client_kwargs["organization"] = organization
+        self._client: Any = OpenAI(**client_kwargs)
 
-        # Build the retry decorator after RateLimitError is in scope.
-        # @retry cannot reference RateLimitError at class definition time
-        # because openai is not imported until __init__ runs.
+        # Build the retry decorator after error classes are in scope.
+        # @retry cannot reference them at class definition time because
+        # openai is not imported until __init__ runs.
         _retry = retry(
-            retry=retry_if_exception_type(RateLimitError),
+            retry=retry_if_exception_type(retryable),
             wait=wait_random_exponential(min=1, max=60),
             stop=stop_after_attempt(6),
         )
@@ -99,8 +153,18 @@ class OpenAIBackend:
         """Return a safe repr that never exposes the API key."""
         return f"OpenAIBackend(model={self._model_name!r})"
 
+    @property
+    def model_name(self) -> str:
+        """Return the underlying model identifier (used for cache namespacing)."""
+        return self._model_name
+
     def embed(self, strings: list[str]) -> np.ndarray:
         """Return embeddings for ``strings`` as a float32 (N, 1536) ndarray.
+
+        Inputs larger than ``_OPENAI_MAX_BATCH_SIZE`` (2048) are chunked
+        client-side and the resulting row blocks are concatenated.  This is
+        a count-based chunk only — no per-token guard, since computing it
+        would require a tokenizer dependency.
 
         Args:
             strings: Input strings to embed.  May be empty.
@@ -112,7 +176,29 @@ class OpenAIBackend:
         """
         if not strings:
             return np.empty((0, 1536), dtype=np.float32)
-        return self._call_api(strings)  # type: ignore[no-any-return]
+
+        if len(strings) <= _OPENAI_MAX_BATCH_SIZE:
+            single: np.ndarray = self._call_api(strings)
+            return single
+
+        # Chunk by count to stay under the API's per-request input cap.
+        chunks: list[np.ndarray] = []
+        for i in range(0, len(strings), _OPENAI_MAX_BATCH_SIZE):
+            batch = strings[i : i + _OPENAI_MAX_BATCH_SIZE]
+            chunks.append(self._call_api(batch))
+        return np.concatenate(chunks, axis=0)
+
+    def similarity(self, a: str, b: str) -> float:
+        """Cosine similarity of the two strings' embeddings, clamped to [0, 1].
+
+        Each call issues an OpenAI API request — wrap in
+        :class:`json_semantic_diff.cache.EmbeddingCache` for repeated lookups
+        to avoid billing the same string twice.
+        """
+        vecs = self.embed([a, b])
+        dot = float(np.dot(vecs[0], vecs[1]))
+        denom = float(np.linalg.norm(vecs[0]) * np.linalg.norm(vecs[1]) + 1e-9)
+        return max(0.0, min(1.0, dot / denom))
 
     def _raw_call(self, strings: list[str]) -> np.ndarray:
         """Make the raw embeddings API call — retried by tenacity via ``_call_api``.

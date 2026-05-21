@@ -110,10 +110,19 @@ class STEDComparator:
 
         Returns:
             A ``ComparisonResult`` with all six fields populated.
+
+        Raises:
+            TypeError: If either ``left`` or ``right`` is not a JSON value
+                (dict, list, str, int, float, bool, None).  Only the top-level
+                type is validated here — nested invalid types will surface
+                deeper in the algorithm.
         """
+        self._validate_json_type(left, "left")
+        self._validate_json_type(right, "right")
+
         t0 = time.perf_counter()
 
-        # Preprocess: strip None-valued keys when null_equals_missing=True
+        # Preprocess: always return fresh structures, never mutate input
         left = self._preprocess(left)
         right = self._preprocess(right)
 
@@ -146,36 +155,72 @@ class STEDComparator:
 
         return ComparisonResult(
             similarity_score=score,
-            matched_pairs=matched_pairs,
+            matched_pairs=tuple(matched_pairs),
             key_mappings=key_mappings,
-            unmatched_left=unmatched_left,
-            unmatched_right=unmatched_right,
+            unmatched_left=tuple(unmatched_left),
+            unmatched_right=tuple(unmatched_right),
             computation_time_ms=elapsed_ms,
         )
+
+    # ------------------------------------------------------------------
+    # Input validation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_json_type(value: Any, name: str) -> None:
+        """Validate that ``value`` is a top-level JSON type.
+
+        Rejects datetimes, sets, custom class instances, and anything else
+        that ``json.dumps`` would reject.  Nested invalid types are NOT
+        checked here — they surface lazily during tree construction.
+
+        Args:
+            value: The value to validate.
+            name:  Argument name (used in the error message).
+
+        Raises:
+            TypeError: If ``value`` is not a JSON value.
+        """
+        # bool is a subclass of int, but both are valid JSON — no special-case needed.
+        if value is None or isinstance(value, (dict, list, str, int, float, bool)):
+            return
+        msg = (
+            f"compare() expects JSON values (dict, list, str, int, float, bool, None) "
+            f"for {name}; got {type(value).__name__}"
+        )
+        raise TypeError(msg)
 
     # ------------------------------------------------------------------
     # Preprocessing
     # ------------------------------------------------------------------
 
     def _preprocess(self, value: Any) -> Any:
-        """Strip None-valued keys when null_equals_missing=True.
+        """Return a fresh copy of ``value``, optionally stripping None-valued keys.
 
-        When ``self._config.null_equals_missing`` is False, the value is
-        returned unchanged.  When True, recursively removes any dict entry
-        whose value is None, so that ``{"x": None}`` becomes ``{}`` and
-        therefore compares as identical to ``{}``.
+        Always returns a freshly constructed structure for ``dict`` and ``list``
+        inputs — the caller never sees a reference to the original container.
+        This guarantees that comparison is non-mutating regardless of
+        ``null_equals_missing``.
+
+        When ``self._config.null_equals_missing`` is True, recursively removes
+        any dict entry whose value is None, so that ``{"x": None}`` becomes
+        ``{}`` and therefore compares as identical to ``{}``.
 
         Args:
             value: Any valid JSON value.
 
         Returns:
-            The preprocessed value (a new object — never mutates input).
+            A fresh structure mirroring ``value`` (immutable scalars are
+            returned as-is — they cannot be mutated).
         """
-        if not self._config.null_equals_missing:
-            return value
+        strip_nones = self._config.null_equals_missing
 
         if isinstance(value, dict):
-            return {k: self._preprocess(v) for k, v in value.items() if v is not None}
+            return {
+                k: self._preprocess(v)
+                for k, v in value.items()
+                if not (strip_nones and v is None)
+            }
         if isinstance(value, list):
             return [self._preprocess(item) for item in value]
         return value
@@ -289,10 +334,10 @@ class STEDComparator:
 
         for i, ka in enumerate(left_keys):
             for j, kb in enumerate(right_keys):
-                if hasattr(self._backend, "similarity"):
-                    key_sim = self._backend.similarity(ka.label, kb.label)
-                else:
-                    key_sim = 1.0  # fallback when backend has no similarity()
+                # _backend is always an EmbeddingCache (constructed in __init__),
+                # which guarantees similarity() is available — either delegated
+                # to the wrapped backend or computed via cosine of embed().
+                key_sim = self._backend.similarity(ka.label, kb.label)
                 cost_matrix[i, j] = 1.0 - key_sim
 
         row_ind, col_ind = hungarian_match(cost_matrix)

@@ -172,12 +172,16 @@ def test_import_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_no_similarity_method() -> None:
-    """FastEmbedBackend must NOT expose a similarity() method.
+def test_similarity_method_present_and_in_range() -> None:
+    """FastEmbedBackend exposes similarity() per the EmbeddingBackend Protocol.
 
-    ML backends rely on EmbeddingCache's cosine fallback — a similarity()
-    method would short-circuit cache-based batching.
+    The method delegates to embed() + clamped cosine; callers wrap in
+    EmbeddingCache to avoid recomputing the same vectors.
     """
-    assert not hasattr(FastEmbedBackend, "similarity"), (
-        "FastEmbedBackend must not define similarity() — use EmbeddingCache cosine fallback"
-    )
+    assert hasattr(FastEmbedBackend, "similarity")
+    backend = FastEmbedBackend()
+    score_self = backend.similarity("user_name", "user_name")
+    score_diff = backend.similarity("user_name", "completely_unrelated_text")
+    assert 0.0 <= score_self <= 1.0
+    assert 0.0 <= score_diff <= 1.0
+    assert score_self >= score_diff

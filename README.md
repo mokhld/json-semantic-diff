@@ -54,16 +54,24 @@ pip install json-semantic-diff[weave]
 ```python
 from json_semantic_diff import compare
 
+# Note: `mailAddress` vs `email_address` is a fuzzy (not exact) key match,
+# so the score is close to but below 1.0.
 result = compare(
     {"user_name": "Alice", "email_address": "alice@corp.com"},
-    {"userName": "Alice", "emailAddress": "alice@corp.com"},
+    {"userName": "Alice", "mailAddress": "alice@corp.com"},
 )
 
-print(result.similarity_score)   # 0.97
-print(result.key_mappings)       # {"user_name": "userName", "email_address": "emailAddress"}
-print(result.unmatched_left)     # []
-print(result.unmatched_right)    # []
-print(result.computation_time_ms)  # 0.5
+print(result.similarity_score)   # ~0.98
+print(result.key_mappings)       # {"user_name": "userName", "email_address": "mailAddress"}
+print(result.unmatched_left)     # ()
+print(result.unmatched_right)    # ()
+print(result.computation_time_ms)  # sub-millisecond on small docs
+
+# Naming-convention-only differences score a perfect 1.0:
+compare(
+    {"user_name": "Alice"},
+    {"userName": "Alice"},
+).similarity_score  # 1.0
 ```
 
 ### Quick similarity score
@@ -71,11 +79,12 @@ print(result.computation_time_ms)  # 0.5
 ```python
 from json_semantic_diff import similarity_score
 
+# Pure naming-convention difference -> identical after normalisation.
 score = similarity_score(
     {"first_name": "Bob", "last_name": "Smith"},
     {"firstName": "Bob", "lastName": "Smith"},
 )
-print(score)  # 0.97
+print(score)  # 1.0
 ```
 
 ### Boolean equivalence check
@@ -112,7 +121,7 @@ erratic = [
     {"fullName": "Alice", "years": 30},
     {"person": "Alice"},
 ]
-print(consistency_score(erratic))  # < 0.4
+print(consistency_score(erratic))  # ~0.15
 ```
 
 ## API Reference

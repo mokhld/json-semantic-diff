@@ -11,6 +11,12 @@ Also handles:
 - Digit boundaries (e.g. "address2" -> "address 2", "v2Config" -> "v 2 config")
 - Mixed separators (e.g. "user_name-field" -> "user name field")
 - Multiple consecutive separators (e.g. "some__key" -> "some key")
+
+Unicode policy: case-class regexes use ASCII semantics (``re.ASCII``) so
+that scripts without an upper/lower distinction (e.g. CJK like "用户名",
+fully-lower precomposed Latin like "naïve") are treated as a single
+indivisible token.  The existing ASCII splitting behaviour is preserved
+bit-for-bit; unicode keys simply do not gain spurious case boundaries.
 """
 
 import re
@@ -20,20 +26,23 @@ import re
 # Matches snake_case and kebab-case separators (underscores and hyphens)
 _SEP = re.compile(r"[_\-]+")
 
-# Matches camelCase boundary: lowercase letter followed by uppercase letter
+# Matches camelCase boundary: lowercase ASCII letter followed by uppercase ASCII letter
 # e.g. "camelCase" -> "camel Case" via "\1 \2"
-_UPPER_LOWER = re.compile(r"([a-z])([A-Z])")
+# ASCII flag ensures non-Latin letters (e.g. "用户名") do NOT trigger splits.
+_UPPER_LOWER = re.compile(r"([a-z])([A-Z])", re.ASCII)
 
 # Matches acronym runs: sequence of uppercase letters before an uppercase+lowercase pair
 # e.g. "URLParser" -> "URL Parser" via "\1 \2"
-_UPPER_RUN = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_UPPER_RUN = re.compile(r"([A-Z]+)([A-Z][a-z])", re.ASCII)
 
 # Matches letter/digit boundaries in both directions
 # e.g. "address2" -> "address 2", "v2Config" -> "v 2 Config"
 # NOTE: Applied twice (passes 4a and 4b) because the regex engine consumes both
 # characters in each match (e.g. "v2" in "v2Config"), so the other boundary
 # ("2C") is not visible until a second pass after the first substitution.
-_DIGIT_BOUNDARY = re.compile(r"([a-zA-Z])(\d)|(\d)([a-zA-Z])")
+# ASCII flag keeps `\d` ASCII-only (no Eastern Arabic numerals, etc.) and
+# the [a-zA-Z] character class is already ASCII by construction.
+_DIGIT_BOUNDARY = re.compile(r"([a-zA-Z])(\d)|(\d)([a-zA-Z])", re.ASCII)
 
 
 class KeyNormalizer:

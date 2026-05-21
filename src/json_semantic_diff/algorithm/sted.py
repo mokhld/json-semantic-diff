@@ -31,7 +31,7 @@ from json_semantic_diff.algorithm.costs import cost_delete, cost_insert, cost_up
 from json_semantic_diff.algorithm.matcher import hungarian_match
 from json_semantic_diff.algorithm.normalizer import normalize_similarity
 from json_semantic_diff.tree.builder import TreeBuilder
-from json_semantic_diff.tree.nodes import NodeType, TreeNode
+from json_semantic_diff.tree.nodes import NodeType, TreeNode, subtree_size
 
 if TYPE_CHECKING:
     from json_semantic_diff.protocols import EmbeddingBackend
@@ -161,9 +161,13 @@ class STEDAlgorithm:
         Returns:
             Non-negative float distance.
         """
-        # Type mismatch: unit cost x max children (treats as full delete+insert)
+        # Type mismatch: full delete of the left subtree + full insert of the
+        # right subtree.  Cost scales with subtree size so a deeply-different
+        # branch correctly outweighs a single-scalar swap during Hungarian /
+        # DP matching.  Using ``max`` (rather than sum) keeps the per-node
+        # contribution proportional to the larger structure being replaced.
         if node_a.node_type != node_b.node_type:
-            return 1.0
+            return float(max(subtree_size(node_a), subtree_size(node_b)))
 
         node_type = node_a.node_type
 
@@ -211,10 +215,18 @@ class STEDAlgorithm:
     def _compute_key_similarity(self, key_a: TreeNode, key_b: TreeNode) -> float:
         """Compute normalized similarity between two KEY nodes.
 
-        A KEY node wraps exactly one value child.  Normalization treats the
-        key-value pair as 1 element deep: the key-label cost plus the value
-        child distance are summed and normalized by the number of value
-        children (always 1 per side for well-formed keys).
+        A KEY node wraps exactly one value child, but that value can be a
+        deep subtree (object/array).  The raw distance returned by
+        ``_compute_node_distance`` sums the key-label cost ([0, 1]) and the
+        recursive value distance (which scales with subtree size — easily
+        > 1 for nested structures).  Normalising by ``len(children)`` (≤ 1)
+        would clip almost every non-trivial difference to 0.0, collapsing
+        KEY similarity to binary — see audit finding C6.
+
+        Instead, normalise by the maximum *subtree size* of the two value
+        children plus 1 (for the key-label cost itself).  That keeps the
+        ratio in [0, 1] without losing resolution: a small leaf change in a
+        large subtree no longer wipes out the entire score.
 
         Args:
             key_a: Left KEY node.
@@ -224,13 +236,15 @@ class STEDAlgorithm:
             Float in [0.0, 1.0].
         """
         raw_dist = self._compute_node_distance(key_a, key_b)
-        # A KEY node has at most 1 child; normalize over that 1-element depth.
-        # The raw distance sums key-label cost [0,1] + value child cost [0,+∞].
-        # normalize_similarity clips via min(1, ...) so scores stay in [0,1].
+        # Denominator = 1 (the key-label cost) + max size of the two value
+        # subtrees.  Empty / malformed KEY nodes fall back to size 0.
+        size_a = subtree_size(key_a.children[0]) if key_a.children else 0
+        size_b = subtree_size(key_b.children[0]) if key_b.children else 0
+        denom = 1 + max(size_a, size_b)
         return normalize_similarity(
             raw_dist,
-            n_left=len(key_a.children),
-            n_right=len(key_b.children),
+            n_left=denom,
+            n_right=denom,
             lambda_=self._config.lambda_unmatched,
         )
 
@@ -256,7 +270,9 @@ class STEDAlgorithm:
         """Compute similarity between two OBJECT nodes via Hungarian matching.
 
         Matches KEY children optimally (order-invariant), normalizes the
-        resulting raw distance via the STED formula.
+        resulting raw distance via the STED paper formula (child-count
+        denominator preserves backwards-compatible scoring for shallow
+        disjoint objects).
 
         Args:
             obj_a: Left OBJECT node.

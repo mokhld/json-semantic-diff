@@ -79,8 +79,18 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          git tag -f "v${VERSION}"
-          git push origin "v${VERSION}" --force
+          # Fail loudly if the tag already exists locally or on the remote —
+          # never silently overwrite an already-published release tag.
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "Tag v${VERSION} already exists locally. Refusing to overwrite." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists on origin. Refusing to overwrite." >&2
+            exit 1
+          fi
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
 
   test:
     name: Test (Python ${{ matrix.python-version }})
@@ -170,7 +180,10 @@ jobs:
   github-release:
     name: Create GitHub Release
     needs: [publish-testpypi, publish-pypi]
-    if: ${{ !inputs.dry_run && always() && !failure() && !cancelled() }}
+    # Only cut a GitHub release when the real PyPI publish actually succeeded.
+    # `!failure()` would let this run when publish-pypi was SKIPPED (e.g. a
+    # testpypi-only release), creating a GH release with no PyPI artifact.
+    if: ${{ !inputs.dry_run && needs['publish-pypi'].result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

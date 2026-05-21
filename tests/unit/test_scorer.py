@@ -32,6 +32,28 @@ class TestConsistencyScorerEdgeCases:
         assert scorer.compute([{"k": "v"}, {"k": "v"}]) == pytest.approx(1.0)
 
 
+class TestConsistencyScorerBounds:
+    """Property: score is always in [0.0, 1.0] for any list of JSON docs."""
+
+    @pytest.mark.parametrize(
+        "docs",
+        [
+            [{"a": 1}, {"a": 1}],
+            [{"a": 1}, {"b": 2}, {"c": 3}],
+            [{}, {}, {}],
+            [1, 2, 3],
+            ["hello", "world", "foo"],
+            [None, None, None],
+            [{"x": [1, 2, 3]}, {"x": [3, 2, 1]}],
+        ],
+    )
+    def test_score_is_in_unit_interval(self, docs: list) -> None:
+        scorer = ConsistencyScorer()
+        score = scorer.compute(docs)
+        assert isinstance(score, float)
+        assert 0.0 <= score <= 1.0
+
+
 class TestConsistencyScorerFormula:
     """Verify max(0, mean - std) formula behavior."""
 

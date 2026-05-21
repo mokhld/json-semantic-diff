@@ -56,8 +56,8 @@ class TestCoreComparison:
     def test_identical_objects_no_unmatched(self) -> None:
         cmp = STEDComparator()
         result = cmp.compare({"a": 1}, {"a": 1})
-        assert result.unmatched_left == []
-        assert result.unmatched_right == []
+        assert result.unmatched_left == ()
+        assert result.unmatched_right == ()
 
     def test_identical_objects_computation_time_positive(self) -> None:
         cmp = STEDComparator()
@@ -93,7 +93,7 @@ class TestCoreComparison:
         """Scalar roots have no KEY children — matched_pairs is empty."""
         cmp = STEDComparator()
         result = cmp.compare("hello", "world")
-        assert result.matched_pairs == []
+        assert result.matched_pairs == ()
         assert result.key_mappings == {}
 
 
@@ -156,8 +156,8 @@ class TestMatchExtraction:
         cmp = STEDComparator()
         result = cmp.compare({"a": 1, "b": 2}, {"a": 1, "c": 3})
         assert len(result.matched_pairs) == 2
-        assert result.unmatched_left == []
-        assert result.unmatched_right == []
+        assert result.unmatched_left == ()
+        assert result.unmatched_right == ()
 
     def test_unmatched_produced_when_sizes_differ(self) -> None:
         """When left has more keys than right, surplus left keys are unmatched."""
@@ -201,14 +201,14 @@ class TestMatchExtraction:
     def test_empty_left_all_right_keys_unmatched(self) -> None:
         cmp = STEDComparator()
         result = cmp.compare({}, {"a": 1, "b": 2})
-        assert result.matched_pairs == []
+        assert result.matched_pairs == ()
         assert result.key_mappings == {}
         assert len(result.unmatched_right) == 2
 
     def test_empty_right_all_left_keys_unmatched(self) -> None:
         cmp = STEDComparator()
         result = cmp.compare({"a": 1, "b": 2}, {})
-        assert result.matched_pairs == []
+        assert result.matched_pairs == ()
         assert result.key_mappings == {}
         assert len(result.unmatched_left) == 2
 

@@ -18,16 +18,22 @@ from json_semantic_diff.backends.static import StaticBackend
 # The list is kept alphabetically sorted (RUF022 compliance).
 __all__ = ["StaticBackend"]
 
+# Narrow the except to ModuleNotFoundError (a subclass of ImportError) so
+# real ImportErrors raised from within the optional backend modules — e.g.
+# misconfiguration or a broken transitive dep — propagate instead of being
+# silently swallowed into "optional extra not installed".  Note: the
+# fastembed/openai backends defer their *own* optional imports to __init__,
+# so simply importing the module never requires the extra to be present.
 try:
     from json_semantic_diff.backends.fastembed import FastEmbedBackend
 
     __all__ = sorted([*__all__, "FastEmbedBackend"])
-except ImportError:
+except ModuleNotFoundError:
     pass
 
 try:
     from json_semantic_diff.backends.openai import OpenAIBackend
 
     __all__ = sorted([*__all__, "OpenAIBackend"])
-except ImportError:
+except ModuleNotFoundError:
     pass

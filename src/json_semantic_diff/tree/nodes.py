@@ -50,3 +50,29 @@ class TreeNode:
     raw_label: str = ""
     value: Any = None
     children: list[TreeNode] = field(default_factory=list)
+
+
+def subtree_size(node: TreeNode) -> int:
+    """Return the total number of nodes in the subtree rooted at ``node``.
+
+    Counts the node itself plus every transitive child.  Used by the STED
+    algorithm to scale edit costs for whole-subtree delete/insert operations
+    (e.g. when two compared nodes have different ``node_type``) so the
+    resulting cost reflects how much structure was destroyed and created,
+    not a flat 1.0.
+
+    Args:
+        node: The root of the subtree to measure.
+
+    Returns:
+        Integer count >= 1 (the node itself always counts).
+    """
+    total = 1
+    # Iterative DFS to avoid recursion limits on very deep trees
+    stack: list[TreeNode] = list(node.children)
+    while stack:
+        current = stack.pop()
+        total += 1
+        if current.children:
+            stack.extend(current.children)
+    return total

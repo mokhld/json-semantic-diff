@@ -36,6 +36,11 @@ def consistency_score(
     Returns:
         A float in [0.0, 1.0]. 1.0 means all documents are identical (perfectly
         consistent). Returns 1.0 for empty lists and single-document lists.
+
+    Raises:
+        ValueError: If ``config`` is provided with invalid weights (e.g.
+            ``w_s + w_c != 1.0`` or ``lambda_unmatched < 0``).  Raised by
+            :class:`STEDConfig` on construction.
     """
     return ConsistencyScorer(config=config).compute(docs)
 
@@ -58,6 +63,13 @@ def compare(
     Returns:
         A ``ComparisonResult`` with similarity_score, matched_pairs, key_mappings,
         unmatched_left, unmatched_right, and computation_time_ms populated.
+
+    Raises:
+        TypeError: If ``left`` or ``right`` is not a JSON value (dict, list,
+            str, int, float, bool, None).
+        ValueError: If ``config`` is provided with invalid weights (e.g.
+            ``w_s + w_c != 1.0`` or ``lambda_unmatched < 0``).  Raised by
+            :class:`STEDConfig` on construction.
     """
     comparator = STEDComparator(config=config)
     return comparator.compare(left, right)
@@ -85,7 +97,15 @@ def is_equivalent(
 
     Returns:
         True if ``compare(left, right, config).similarity_score >= threshold``.
+
+    Raises:
+        TypeError: If ``left`` or ``right`` is not a JSON value.
+        ValueError: If ``threshold`` is outside ``[0.0, 1.0]``, or if ``config``
+            is provided with invalid weights.
     """
+    if not 0.0 <= threshold <= 1.0:
+        msg = f"threshold must be in [0.0, 1.0], got {threshold}"
+        raise ValueError(msg)
     result = compare(left, right, config=config)
     return result.similarity_score >= threshold
 
@@ -104,6 +124,10 @@ def similarity_score(
 
     Returns:
         A float in [0.0, 1.0]. 1.0 means identical; 0.0 means completely dissimilar.
+
+    Raises:
+        TypeError: If ``left`` or ``right`` is not a JSON value.
+        ValueError: If ``config`` is provided with invalid weights.
     """
     result = compare(left, right, config=config)
     return result.similarity_score

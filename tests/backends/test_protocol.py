@@ -20,6 +20,9 @@ class _UserBackend:
     def embed(self, strings: list[str]) -> np.ndarray:
         return np.zeros((len(strings), 4), dtype=np.float64)
 
+    def similarity(self, a: str, b: str) -> float:
+        return 1.0 if a == b else 0.0
+
 
 class _NoEmbedBackend:
     """Class with no embed method — should NOT satisfy Protocol."""

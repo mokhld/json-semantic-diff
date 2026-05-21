@@ -338,15 +338,13 @@ def test_embed_preserves_input_order(backend: OpenAIBackend) -> None:
     assert np.allclose(result[2], [0.3] * 1536), "Row 2 should be gamma"
 
 
-def test_no_similarity_method() -> None:
-    """``OpenAIBackend`` must NOT expose a ``similarity()`` method.
+def test_similarity_method_present() -> None:
+    """``OpenAIBackend`` exposes ``similarity()`` per the EmbeddingBackend Protocol.
 
-    ML backends rely on EmbeddingCache's cosine fallback -- a ``similarity()``
-    method would short-circuit cache-based batching.
+    The method delegates to ``embed()`` + clamped cosine; callers wrap in
+    ``EmbeddingCache`` to avoid billing the same string twice.
     """
-    assert not hasattr(OpenAIBackend, "similarity"), (
-        "OpenAIBackend must not define similarity() -- use EmbeddingCache cosine fallback"
-    )
+    assert hasattr(OpenAIBackend, "similarity")
 
 
 def test_client_max_retries_zero(monkeypatch: pytest.MonkeyPatch) -> None:

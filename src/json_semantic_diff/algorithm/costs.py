@@ -63,20 +63,50 @@ def _content_distance(node_a: TreeNode, node_b: TreeNode, config: STEDConfig) ->
     """Compute content distance between two nodes.
 
     SCALAR nodes: 0.0 if values equal, 1.0 otherwise.
-    When config.type_coercion is True, numeric strings are coerced before
-    comparison (e.g. "123" == 123 yields 0.0).
+
+    POLICY: ``bool`` is its own type — never coerced.  ``True == 1`` and
+    ``False == 0`` are TRUE in Python (bool subclasses int), which would
+    spuriously collapse ``True`` and ``1`` to distance 0.0.  We guard
+    against that with a ``type(a) is type(b)`` check before equality, and
+    explicitly disqualify bools from the numeric-coercion fast-path.
+
+    When ``config.type_coercion`` is True, numeric strings are coerced
+    before comparison (e.g. ``"123" == 123`` yields 0.0) — but again,
+    only when neither side is a bool.
+
     Non-SCALAR nodes: 0.0 (structural nodes have no content to compare).
     """
     if node_a.node_type == NodeType.SCALAR and node_b.node_type == NodeType.SCALAR:
-        if node_a.value == node_b.value:
+        va = node_a.value
+        vb = node_b.value
+
+        # Bool is its own type — exact-type identity required for equality.
+        # This prevents True == 1 / False == 0 from collapsing to 0.0.
+        a_is_bool = isinstance(va, bool)
+        b_is_bool = isinstance(vb, bool)
+        if a_is_bool or b_is_bool:
+            if a_is_bool and b_is_bool and va == vb:
+                return 0.0
+            return 1.0
+
+        # Non-bool: ordinary equality (same-type values, e.g. "5" == "5",
+        # 5 == 5, 5.0 == 5).  Different types like "5" vs 5 are NOT equal
+        # unless the type-coercion path below accepts them.
+        if type(va) is type(vb) and va == vb:
             return 0.0
+
+        # Same numeric value across int/float (e.g. 5 == 5.0) — int/float
+        # are mutually compatible numeric types, no coercion needed.
+        if type(va) in (int, float) and type(vb) in (int, float) and va == vb:
+            return 0.0
+
         if config.type_coercion:
             try:
-                if type(node_a.value) in (int, float) or type(node_b.value) in (
-                    int,
-                    float,
-                ):
-                    return 0.0 if float(node_a.value) == float(node_b.value) else 1.0
+                # Coerce only when at least one side is numeric (int/float)
+                # AND neither side is a bool.  Already excluded by the
+                # a_is_bool/b_is_bool branch above.
+                if type(va) in (int, float) or type(vb) in (int, float):
+                    return 0.0 if float(va) == float(vb) else 1.0
             except (ValueError, TypeError):
                 pass
         return 1.0

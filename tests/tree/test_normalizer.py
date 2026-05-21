@@ -141,3 +141,50 @@ class TestEdgeCases:
         result = normalizer.normalize("  spaced  ")
         # Spaces treated as whitespace; split() collapses them
         assert result == result.strip()
+
+
+# ---------------------------------------------------------------------------
+# Unicode handling (M10): non-ASCII keys must NOT get spurious case splits
+# ---------------------------------------------------------------------------
+
+
+class TestUnicodeKeys:
+    """Unicode keys are treated as a single indivisible token.
+
+    Policy: case-class regexes use ``re.ASCII`` semantics, so scripts
+    without an upper/lower distinction (CJK, etc.) and fully-lowercase
+    precomposed Latin keys (e.g. naïveKey) preserve the SAME splitting
+    behaviour for the ASCII portions; the non-ASCII portion never injects
+    a spurious boundary.
+    """
+
+    def test_cjk_key_is_single_token(self, normalizer: KeyNormalizer) -> None:
+        """CJK characters (no case) -> returned unchanged, no spaces added."""
+        result = normalizer.normalize("用户名")
+        assert result == "用户名"
+
+    def test_naive_key_no_spurious_split(self, normalizer: KeyNormalizer) -> None:
+        """'naïveKey' splits exactly at 'e|K' (ASCII boundary), producing
+        'naïve key' — the ï/ASCII boundary must NOT introduce an extra split."""
+        result = normalizer.normalize("naïveKey")
+        # Lowercase final, only one ASCII camel boundary (e -> K)
+        assert result == "naïve key"
+
+    def test_pure_unicode_lowercase_passes_through(
+        self, normalizer: KeyNormalizer
+    ) -> None:
+        """Pure non-ASCII lowercase word: unchanged (just lowercased + collapsed)."""
+        result = normalizer.normalize("café")
+        assert result == "café"
+
+    def test_unicode_with_underscore_split(self, normalizer: KeyNormalizer) -> None:
+        """Underscore separator still splits; unicode tokens preserved."""
+        result = normalizer.normalize("用户_名")
+        assert result == "用户 名"
+
+    def test_eastern_arabic_digits_not_split(self, normalizer: KeyNormalizer) -> None:
+        """Non-ASCII digits (Eastern Arabic ٢) must NOT trigger the
+        digit-boundary rule — ASCII flag keeps ``\\d`` ASCII-only."""
+        result = normalizer.normalize("address٢")
+        # No split between 'address' and '٢' because ٢ is not an ASCII digit
+        assert result == "address٢"

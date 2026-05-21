@@ -75,6 +75,14 @@ class FastEmbedBackend:
             threads=intra_op_num_threads,
         )
         self._model_name = model_name
+        # Embedding dim is learned lazily on first embed() so we don't
+        # hardcode 384 for non-MiniLM models.
+        self._dim: int | None = None
+
+    @property
+    def model_name(self) -> str:
+        """Return the underlying model identifier (used for cache namespacing)."""
+        return self._model_name
 
     def embed(self, strings: list[str]) -> np.ndarray:
         """Return embeddings for ``strings`` as a float32 ndarray.
@@ -83,31 +91,42 @@ class FastEmbedBackend:
         ``(D,)`` float32 arrays — this method materialises the generator and
         stacks the rows into an ``(N, D)`` matrix.
 
+        The embedding dimension is learned lazily on the first non-empty
+        ``embed()`` call and cached on the instance.  Callers passing an empty
+        list before any real embed will trigger a single throwaway probe to
+        learn the dim so the returned ``(0, D)`` shape is correct for any
+        model (not just the historical 384-dim default).
+
         Args:
             strings: Input strings to embed.  May be empty.
 
         Returns:
             Shape ``(N, D)`` numpy array with ``dtype=float32`` where
             ``N = len(strings)`` and ``D`` is the model's embedding dimension
-            (e.g. 384 for ``all-MiniLM-L6-v2`` or ``bge-small-en-v1.5``).
+            (e.g. 384 for ``all-MiniLM-L6-v2`` or 1024 for larger models).
         """
         if not strings:
-            return np.empty((0, 384), dtype=np.float32)
+            if self._dim is None:
+                # Probe with a single throwaway embed to learn the model dim.
+                probe = list(self._model.embed(["_"]))
+                self._dim = int(probe[0].shape[0])
+            return np.empty((0, self._dim), dtype=np.float32)
 
         # embed() returns a generator of (D,) float32 arrays — must materialise.
         vectors = list(self._model.embed(strings))
-        return np.stack(vectors).astype(np.float32)
+        stacked = np.stack(vectors).astype(np.float32)
+        if self._dim is None:
+            self._dim = int(stacked.shape[1])
+        return stacked
 
+    def similarity(self, a: str, b: str) -> float:
+        """Cosine similarity of the two strings' embeddings, clamped to [0, 1].
 
-# ---------------------------------------------------------------------------
-# Module-level pre-warm singleton
-# ---------------------------------------------------------------------------
-# Instantiating FastEmbedBackend triggers ONNX model loading, which is the
-# dominant cold-start cost (~1-2 s). Doing this at import time amortises the
-# cost to a one-time hit rather than the first call inside a running program.
-# The try/except ensures base installs (no fastembed) are completely unaffected.
-
-try:
-    _DEFAULT_BACKEND = FastEmbedBackend()
-except ImportError:
-    _DEFAULT_BACKEND = None  # type: ignore[assignment]
+        Each call embeds both strings — wrap in
+        :class:`json_semantic_diff.cache.EmbeddingCache` for repeated lookups
+        to avoid recomputing the same vectors.
+        """
+        vecs = self.embed([a, b])
+        dot = float(np.dot(vecs[0], vecs[1]))
+        denom = float(np.linalg.norm(vecs[0]) * np.linalg.norm(vecs[1]) + 1e-9)
+        return max(0.0, min(1.0, dot / denom))

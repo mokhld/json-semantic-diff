@@ -5,6 +5,10 @@ on:
     branches: ["**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Weekly Monday 06:00 UTC benchmark run
+    - cron: "0 6 * * 1"
 
 jobs:
   lint:
@@ -67,3 +71,24 @@ jobs:
           key: venv-test-py${{ matrix.python-version }}-${{ hashFiles('poetry.lock') }}
       - run: poetry install --no-interaction --with dev
       - run: poetry run pytest
+
+  benchmark:
+    name: Benchmarks (optional)
+    # Only runs on manual dispatch or the weekly schedule — never on PRs.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-benchmark-py3.11-${{ hashFiles('poetry.lock') }}
+      - run: poetry install --no-interaction --with dev
+      - run: poetry run pytest tests/benchmarks --benchmark-only

@@ -26,7 +26,7 @@ class TestSC1ComparisonResultRichness:
         assert len(result.matched_pairs) > 0
         assert result.key_mappings is not None
         assert len(result.key_mappings) > 0
-        assert result.unmatched_left is not None  # may be empty list, not None
+        assert result.unmatched_left is not None  # may be empty tuple, not None
         assert result.unmatched_right is not None
         assert result.computation_time_ms is not None
         assert result.computation_time_ms > 0

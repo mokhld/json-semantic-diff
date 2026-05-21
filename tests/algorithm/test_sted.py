@@ -525,3 +525,108 @@ class TestAdditionalCorrectness:
         score_equal = algo.compute([1, 2, 3], [1, 2, 3])
         score_longer = algo.compute([1, 2, 3], [1, 2, 3, 4])
         assert score_longer < score_equal
+
+
+# ---------------------------------------------------------------------------
+# Type-mismatch cost scaling (C5) and KEY normalization resolution (C6)
+# ---------------------------------------------------------------------------
+
+
+class TestTypeMismatchSubtreeScaling:
+    """Type-mismatch at a child position scales cost by subtree size.
+
+    Before the fix, ``_compute_node_distance`` returned a flat 1.0 whenever
+    two compared nodes had different ``node_type``, which meant deleting a
+    100-node nested object and inserting a single scalar was charged the
+    same as a 1-vs-1 swap.  The Hungarian / DP matching then picked
+    nonsensical alignments because all cross-type swaps looked equally
+    cheap.  The fix scales the cost by ``max(subtree_size(a), subtree_size(b))``.
+    """
+
+    def test_deep_subtree_vs_scalar_more_costly_than_scalar_swap(
+        self, algo: STEDAlgorithm
+    ) -> None:
+        """Replacing a 5-key nested object with a scalar must cost more than
+        a single scalar mismatch — at the same child position."""
+        # Same key on both sides ("k"); value differs in size of subtree
+        big_subtree = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+        score_big_swap = algo.compute({"k": big_subtree}, {"k": "scalar"})
+        score_small_swap = algo.compute({"k": "x"}, {"k": "scalar"})
+        # Bigger subtree replacement -> larger raw cost -> lower similarity
+        assert score_big_swap < score_small_swap
+
+    def test_hungarian_prefers_size_matched_pair(self, algo: STEDAlgorithm) -> None:
+        """When two object branches differ, Hungarian must prefer matching a
+        small-vs-small swap to a large-vs-small swap (because the latter
+        now correctly costs more)."""
+        a = {"big": {"x": 1, "y": 2, "z": 3}, "small": 1}
+        b = {"big": {"x": 1, "y": 2, "z": 3}, "small": 2}  # tiny diff at 'small'
+        # The matching should align big->big (identical, cost 0) and
+        # small->small (cheap scalar swap) — NOT cross-swap.
+        score = algo.compute(a, b)
+        # Cross-swapping would be much worse; matched pair should give high score
+        assert score > 0.7
+
+    def test_object_vs_array_at_inner_key_costly(self, algo: STEDAlgorithm) -> None:
+        """At an inner KEY, value=object vs value=array now charges full
+        subtree-size cost rather than 1.0."""
+        a = {"data": {"x": 1, "y": 2, "z": 3}}
+        b = {"data": [1, 2, 3]}
+        score = algo.compute(a, b)
+        # Definitely less than identity but not a flat 0; bounded in [0,1]
+        assert 0.0 <= score < 1.0
+
+
+class TestKeyNormalizationResolution:
+    """KEY-level normalization must preserve resolution for nested subtrees.
+
+    The internal helper ``_compute_key_similarity`` previously normalised
+    by ``len(children)`` (always 1), so any value-child cost > 1 was
+    clipped to 0 — collapsing KEY similarity to binary.  The fix
+    normalises by subtree size (audit finding C6 partial fix).
+
+    NOTE: ``_compute_key_similarity`` is currently only reachable through
+    ``_compute_similarity`` on a top-level KEY node — which the public
+    ``compute()`` entry point never produces.  The OBJECT/ARRAY
+    normalisation path (still child-count-based) preserves the existing
+    behaviour for shallow disjoint objects.  These tests pin the direct
+    helper invocation rather than the end-to-end ``compute`` call so the
+    KEY-level fix is locked in for any future caller that does reach it.
+    """
+
+    def test_compute_key_similarity_resolves_small_change_in_large_subtree(
+        self, algo: STEDAlgorithm
+    ) -> None:
+        """Direct ``_compute_key_similarity`` call: 1 leaf differs in a
+        5-key subtree → similarity stays well above 0 (not binary)."""
+        from json_semantic_diff.tree.builder import TreeBuilder
+
+        builder = TreeBuilder()
+        # Build matching KEY subtrees via OBJECT->KEY path
+        a_root = builder.build({"data": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}})
+        b_root = builder.build({"data": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 99}})
+        key_a = a_root.children[0]
+        key_b = b_root.children[0]
+        score = algo._compute_key_similarity(key_a, key_b)
+        # Pre-fix: this was clipped near 0 because raw cost > 1 child.
+        # Post-fix: large subtree-size denom keeps the score high.
+        assert score > 0.7, f"expected resolution preserved, got {score}"
+
+    def test_compute_key_similarity_monotonic_in_leaf_diffs(
+        self, algo: STEDAlgorithm
+    ) -> None:
+        """Direct helper: scores decrease monotonically with more leaf diffs."""
+        from json_semantic_diff.tree.builder import TreeBuilder
+
+        builder = TreeBuilder()
+        base = builder.build({"data": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}})
+        one_diff = builder.build({"data": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 99}})
+        two_diff = builder.build({"data": {"a": 1, "b": 2, "c": 3, "d": 99, "e": 99}})
+        three_diff = builder.build(
+            {"data": {"a": 1, "b": 2, "c": 99, "d": 99, "e": 99}}
+        )
+
+        s1 = algo._compute_key_similarity(base.children[0], one_diff.children[0])
+        s2 = algo._compute_key_similarity(base.children[0], two_diff.children[0])
+        s3 = algo._compute_key_similarity(base.children[0], three_diff.children[0])
+        assert s1 > s2 > s3, f"non-monotonic: {s1=}, {s2=}, {s3=}"
