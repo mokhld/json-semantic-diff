@@ -86,6 +86,17 @@ class EmbeddingCache:
         self._cache: LRUCache[tuple[str, str], np.ndarray] = LRUCache(maxsize=max_size)
         # cachetools.LRUCache is not thread-safe — wrap all access in a lock.
         self._lock = threading.Lock()
+        # Audit I2 (wave 8): pairwise similarity cache.  The algorithm
+        # computes ``backend.similarity(label_a, label_b)`` for every KEY
+        # pair inside Hungarian cost-matrix building, then the comparator
+        # extracts key-mapping data with a second Hungarian pass over the
+        # SAME label pairs.  Caching the scalar result here halves the
+        # Levenshtein/cosine work on wide objects without altering any
+        # downstream value.  Keyed canonically (smaller string first) so
+        # ``similarity(a, b)`` and ``similarity(b, a)`` share an entry.
+        self._sim_cache: LRUCache[tuple[str, str, str], float] = LRUCache(
+            maxsize=max_size * max_size
+        )
 
     # ------------------------------------------------------------------
     # Properties
@@ -185,6 +196,12 @@ class EmbeddingCache:
         important because downstream cost is ``1 - sim`` and negative
         similarity would push cost above 1.0, violating STED invariants.
 
+        Audit I2 (wave 8): the result is memoised under a canonical
+        (smaller-string-first) key so the algorithm and the comparator's
+        downstream key-extraction pass don't re-run Levenshtein/cosine
+        on the same label pair.  This is a pure perf win — bit-identical
+        scores, just fewer backend calls on wide objects.
+
         Args:
             a: First string.
             b: Second string.
@@ -192,8 +209,20 @@ class EmbeddingCache:
         Returns:
             Float in [0.0, 1.0] representing semantic similarity.
         """
+        # Canonical key: order-independent so (a, b) and (b, a) share a slot.
+        # Static & embedding backends in this repo are symmetric on labels;
+        # this assumption is documented on the EmbeddingBackend Protocol.
+        sim_key = (self._backend_id, a, b) if a <= b else (self._backend_id, b, a)
+        with self._lock:
+            cached_sim = self._sim_cache.get(sim_key)
+        if cached_sim is not None:
+            return cached_sim
+
         if hasattr(self._backend, "similarity"):
-            return float(self._backend.similarity(a, b))
+            result = float(self._backend.similarity(a, b))
+            with self._lock:
+                self._sim_cache[sim_key] = result
+            return result
 
         # Fallback: embed and compute cosine similarity, clamped to [0, 1].
         vecs = self.embed([a, b])
@@ -201,4 +230,7 @@ class EmbeddingCache:
         norm_a = float(np.linalg.norm(vecs[0]))
         norm_b = float(np.linalg.norm(vecs[1]))
         raw = dot / (norm_a * norm_b + 1e-9)
-        return max(0.0, min(1.0, raw))
+        clamped = max(0.0, min(1.0, raw))
+        with self._lock:
+            self._sim_cache[sim_key] = clamped
+        return clamped

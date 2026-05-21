@@ -89,7 +89,7 @@ class STEDAlgorithm:
                 similarity computation.  The algorithm never imports concrete
                 backend classes — only the Protocol is used at type-check time.
             config:  Algorithm hyper-parameters.  Defaults to ``STEDConfig()``
-                (w_s=0.5, w_c=0.5, lambda_unmatched=0.1, mode=ORDERED).
+                (w_s=0.5, w_c=0.5, lambda_unmatched=0.5, mode=ORDERED).
         """
         self._backend = backend
         self._config = config if config is not None else STEDConfig()

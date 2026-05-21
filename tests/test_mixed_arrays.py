@@ -46,11 +46,17 @@ class TestMixedArrays:
         subtree-size denominator the score reflects the actual amount of
         matching structure — pinned here so future heuristic changes are
         noticed.
+
+        Audit I4 (wave 8): lambda_unmatched bumped 0.1 → 0.5, so the
+        size-diff term (12 vs 10 here) contributes ~5x more to the
+        numerator and the score moves down from 0.7333 to 0.6667.
+        Drift-toward-correct: the array's structural asymmetry now bites
+        proportionally to the size diff.
         """
         left = {"items": [1, "two", {"three": 3}, None]}
         right = {"items": [1, 2, 3, 4]}
         result = compare(left, right)
-        assert result.similarity_score == pytest.approx(0.7333, abs=0.01)
+        assert result.similarity_score == pytest.approx(0.6667, abs=0.01)
 
     def test_auto_with_object_picks_ordered(self) -> None:
         """AUTO mode falls back to ORDERED when any element is an object.

@@ -121,7 +121,7 @@ erratic = [
     {"fullName": "Alice", "years": 30},
     {"person": "Alice"},
 ]
-print(consistency_score(erratic))  # ~0.55
+print(consistency_score(erratic))  # ~0.32
 ```
 
 ## API Reference
@@ -158,7 +158,7 @@ from json_semantic_diff import STEDConfig, ArrayComparisonMode
 config = STEDConfig(
     w_s=0.5,                                          # Structural weight [0, 1]
     w_c=0.5,                                          # Content weight [0, 1] (must sum to 1.0)
-    lambda_unmatched=0.1,                              # Penalty for unmatched children (>= 0)
+    lambda_unmatched=0.5,                              # Penalty for unmatched children (>= 0)
     array_comparison_mode=ArrayComparisonMode.ORDERED,  # ORDERED | UNORDERED | AUTO
     type_coercion=False,                               # "42" == 42?
     null_equals_missing=False,                         # {x: null} == {}?
@@ -171,7 +171,7 @@ result = compare(doc1, doc2, config=config)
 |-----------|------|---------|-------------|
 | `w_s` | `float` | `0.5` | Structural weight. Higher → structure matters more. |
 | `w_c` | `float` | `0.5` | Content weight. Higher → values matter more. Must sum to 1.0 with `w_s`. |
-| `lambda_unmatched` | `float` | `0.1` | Penalty per unmatched child. 0.0 = ignore extras. 1.0 = full penalty. |
+| `lambda_unmatched` | `float` | `0.5` | Penalty per unmatched child. 0.0 = ignore extras. 1.0 = full penalty. |
 | `array_comparison_mode` | `ArrayComparisonMode` | `ORDERED` | How arrays are compared. |
 | `type_coercion` | `bool` | `False` | When True, `"42"` and `42` compare as equal. |
 | `null_equals_missing` | `bool` | `False` | When True, `{"x": null}` and `{}` compare as equal. |

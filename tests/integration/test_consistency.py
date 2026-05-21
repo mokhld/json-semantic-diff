@@ -53,27 +53,32 @@ class TestSC1IdenticalDocuments:
 
 
 class TestSC2StructurallyDifferent:
-    """SC2 — consistency_score returns < 0.7 for structurally different documents.
+    """SC2 — consistency_score returns < 0.6 for structurally different documents.
 
     Audit C6 (wave 7): the per-pair similarity for same-shape, different-content
     OBJECTs no longer binary-collapses against a ``len(children)`` denominator.
     The new floor is around 0.5 per pair, so the post-std-penalty consistency
     score sits below 0.7 (but no longer below 0.5) — the spirit of the SC2
     assertion (well below the equivalence band) still holds.
+
+    Audit I4 (wave 8): with ``lambda_unmatched=0.5`` the same-shape
+    different-content pairs stay near 0.5 (no asymmetry to amplify),
+    so the consistency score lands in the 0.50-0.52 band.  Gate
+    tightened 0.7 → 0.6 — same spirit, narrower noise band.
     """
 
     def test_three_unrelated_objects(self) -> None:
-        """SC2: Three objects with completely different keys score < 0.7."""
+        """SC2: Three objects with completely different keys score < 0.6."""
         docs = [
             {"name": "Alice", "age": 30},
             {"product": "Widget", "price": 9.99},
             {"city": "Paris", "country": "France"},
         ]
         result = consistency_score(docs)
-        assert result < 0.7
+        assert result < 0.6
 
     def test_five_unrelated_objects(self) -> None:
-        """SC2: Five objects with completely different key sets score < 0.7."""
+        """SC2: Five objects with completely different key sets score < 0.6."""
         docs = [
             {"alpha": 1},
             {"beta": 2},
@@ -82,12 +87,12 @@ class TestSC2StructurallyDifferent:
             {"epsilon": 5},
         ]
         result = consistency_score(docs)
-        assert result < 0.7
+        assert result < 0.6
 
     def test_two_different_docs(self) -> None:
-        """SC2: Two structurally different documents score < 0.7."""
+        """SC2: Two structurally different documents score < 0.6."""
         result = consistency_score([{"a": 1}, {"z": 99}])
-        assert result < 0.7
+        assert result < 0.6
 
 
 class TestSC3NormalizedStdDev:

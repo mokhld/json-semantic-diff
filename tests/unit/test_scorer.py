@@ -150,16 +150,19 @@ class TestConsistencyScoreAPIFunction:
         assert result == pytest.approx(1.0)
 
     def test_api_consistency_score_different(self) -> None:
-        """consistency_score() returns < 0.7 for structurally different documents.
+        """consistency_score() returns < 0.6 for structurally different documents.
 
         Audit C6 (wave 7): under proper Zhang-Shasha normalisation,
         ``{"a":1}`` vs ``{"z":99}`` scores ~0.5 (same shape, totally
         different content) rather than ~0.0.
+
+        Audit I4 (wave 8): ``lambda_unmatched=0.5`` tightens the
+        consistency-score floor; gate moved 0.7 → 0.6.
         """
         from json_semantic_diff.api import consistency_score
 
         result = consistency_score([{"a": 1}, {"z": 99}])
-        assert result < 0.7
+        assert result < 0.6
 
     def test_api_consistency_score_with_config(self) -> None:
         """consistency_score() accepts config parameter without error."""

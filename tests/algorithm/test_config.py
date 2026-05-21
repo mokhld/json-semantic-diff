@@ -61,8 +61,11 @@ class TestSTEDConfigDefaults:
         assert config.w_c == 0.5
 
     def test_default_lambda_unmatched(self) -> None:
+        # audit I4 (wave 8): default bumped 0.1 → 0.5 so the unmatched
+        # penalty bites proportionally to the subtree-size diff that
+        # wave-7 (C6) introduced into the normaliser denominator.
         config = STEDConfig()
-        assert config.lambda_unmatched == 0.1
+        assert config.lambda_unmatched == 0.5
 
     def test_default_array_comparison_mode(self) -> None:
         config = STEDConfig()

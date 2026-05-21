@@ -88,11 +88,17 @@ class TestSC1IdentityAndDisjoint:
         whose structures are both ``KEY -> SCALAR`` no longer binary-collapse
         to ~0.  The asymmetric size (1 vs 3 children) still drives the score
         well below the equivalence band (>= 0.85).
+
+        Audit I4 (wave 8): with ``lambda_unmatched=0.5`` the size-diff
+        penalty on the 1-vs-3 mismatch lands the score around 0.30 —
+        well below the original pre-wave-7 0.1 floor but still positive.
+        Gate tightened from < 0.75 to < 0.4 to catch any future
+        regression of the unmatched-penalty bite.
         """
         a = {"a": 1}
         b = {"x": 99, "y": "hello", "z": [1, 2]}
         score = sted.compute(a, b)
-        assert score < 0.75
+        assert score < 0.4
 
 
 # ---------------------------------------------------------------------------
@@ -141,11 +147,16 @@ class TestSC3StructuralBreaks:
         Audit C6 (wave 7): even with deeper subtrees, the KEY value
         type-mismatch (OBJECT vs ARRAY) inflates the matched cost enough
         to keep the overall score below the 0.6 band.
+
+        Audit I4 (wave 8): the size-diff penalty now pushes this case
+        all the way to 0.0 (cost clips at the denominator).  Gate
+        tightened from < 0.6 to < 0.1 — back near the original
+        pre-wave-7 structural-break floor.
         """
         a = {"a": {"b": 1}}
         b = {"x": [1, 2, 3]}
         score = sted.compute(a, b)
-        assert score < 0.6
+        assert score < 0.1
 
 
 # ---------------------------------------------------------------------------

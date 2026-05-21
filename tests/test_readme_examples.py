@@ -99,10 +99,10 @@ class TestConsistencyScoreExample:
         ]
         score = consistency_score(erratic)
         # Audit C6 (wave 7): the per-pair similarity for same-shape /
-        # different-content single-key OBJECTs no longer binary-collapses,
-        # so the erratic generator's consistency lands around 0.55 rather
-        # than ~0.15.  The score still sits below the equivalence band and
-        # well below the stable_generator's 1.0; this looser ceiling keeps
-        # the regression-guard intent (catch huge jumps) without re-asserting
-        # the binary-collapse value.
-        assert 0.0 <= score < 0.7
+        # different-content single-key OBJECTs no longer binary-collapses.
+        # Audit I4 (wave 8): the stronger ``lambda_unmatched=0.5``
+        # pulls the asymmetric pairs further down, so the erratic
+        # generator's consistency lands around 0.32 (was ~0.55 in wave 7).
+        # README was updated to "~0.32" — gate tightened from < 0.7 to
+        # < 0.5 to track the post-I4 floor.
+        assert 0.0 <= score < 0.5

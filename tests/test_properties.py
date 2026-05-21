@@ -129,19 +129,19 @@ def test_symmetry_unordered_mode(a: object, b: object) -> None:
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "AUTO array mode infers ordered vs unordered from content; when a and "
-        "b have different element-type makeups the inferred mode can differ "
-        "between (a, b) and (b, a), so symmetry is not guaranteed.  Audit "
-        "C5/C6 flagged this; tracking separately."
-    ),
-    strict=False,
-)
 @given(a=json_containers, b=json_containers)
 @settings(max_examples=50, deadline=2000, suppress_health_check=[HealthCheck.too_slow])
 def test_symmetry_auto_mode(a: object, b: object) -> None:
-    """AUTO array mode: similarity_score(a, b) == similarity_score(b, a)."""
+    """AUTO array mode: similarity_score(a, b) == similarity_score(b, a).
+
+    Audit H9 (wave 8): the xfail-but-xpassing marker is gone — the AUTO
+    mode resolution inspects both arrays' contents (``arr_a.children +
+    arr_b.children``) so the inferred ordered-vs-unordered choice is
+    invariant under argument swap.  Wave 5's T6 deterministic suite
+    confirmed symmetry across 45 parametrised shapes; this property
+    test extends the coverage to 50 random shapes per CI run.  Kept
+    here as a regression guard.
+    """
     cfg = STEDConfig(array_comparison_mode=ArrayComparisonMode.AUTO)
     s_ab = compare(a, b, config=cfg).similarity_score
     s_ba = compare(b, a, config=cfg).similarity_score

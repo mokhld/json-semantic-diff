@@ -59,27 +59,28 @@ class TestPearsonCorrelation:
 
     Audit C6 (wave 7): the Zhang-Shasha denominator inflates same-shape
     different-content scores from the pre-wave-7 binary-collapsed ~0.0 up
-    into the ~0.5 band.  That compresses the lower half of the corpus and
-    drops the Pearson correlation from 0.93 to ~0.82.  The corpus is the
-    same hand-judged baseline; rather than re-grade 45 pairs to the new
-    floor we keep the original labels (which capture *semantic*
-    relatedness as judged by humans) and relax the gate to >= 0.80, which
-    is still a strong correlation and still catches major regressions.
-    Re-grading the corpus to the new floor is tracked separately.
+    into the ~0.5 band.  That compressed the lower half of the corpus
+    and dropped the Pearson correlation from 0.93 to ~0.82.
+
+    Audit I4 (wave 8): the stronger ``lambda_unmatched=0.5`` pulls
+    "unrelated" scores back down (corpus mean ~0.23, was ~0.43 in wave 7)
+    and restores Pearson to ~0.85.  The gate tightens accordingly —
+    0.80 leaves too much slack now that the corpus realigns with the
+    new floor.  Re-grading the corpus is still tracked separately.
     """
 
-    def test_pearson_correlation_above_080(
+    def test_pearson_correlation_above_085(
         self,
         scored_pairs: list[dict],  # type: ignore[type-arg]
     ) -> None:
-        """Pearson correlation between expected and actual scores exceeds 0.80."""
+        """Pearson correlation between expected and actual scores exceeds 0.85."""
         expected = [p["expected_score"] for p in scored_pairs]
         actual = [p["actual_score"] for p in scored_pairs]
         correlation: float
         p_value: float
         correlation, p_value = pearsonr(expected, actual)  # type: ignore[assignment]
-        assert correlation > 0.80, (
-            f"Pearson correlation {correlation:.4f} < 0.80 threshold"
+        assert correlation > 0.85, (
+            f"Pearson correlation {correlation:.4f} < 0.85 threshold"
         )
         assert p_value < 0.05, f"p-value {p_value:.4f} not statistically significant"
 
@@ -89,17 +90,19 @@ class TestPrecisionAtThreshold:
 
     Audit C6 (wave 7): a handful of corpus pairs that the binary-collapsed
     normaliser pushed below 0.85 now sit just above it under the
-    Zhang-Shasson denominator (e.g. ``rename-abbrev-desc`` at 0.84).
-    The relevant invariant — that the equivalence classifier doesn't
-    silently degrade — survives at the >= 0.80 precision band; below
-    that the gate is just noise.
+    Zhang-Shasha denominator (e.g. ``rename-abbrev-desc`` at 0.84).
+
+    Audit I4 (wave 8): asymmetric "unrelated" pairs drop further below
+    the equivalence band under ``lambda_unmatched=0.5``, so the
+    predicted-positive set shrinks to the genuinely-close cases.
+    Precision recovers above 0.85 and the gate tightens.
     """
 
-    def test_precision_above_080(
+    def test_precision_above_085(
         self,
         scored_pairs: list[dict],  # type: ignore[type-arg]
     ) -> None:
-        """Of pairs predicted equivalent (score >= 0.85), >80% truly are."""
+        """Of pairs predicted equivalent (score >= 0.85), >85% truly are."""
         threshold = 0.85
         true_positives = 0
         predicted_positives = 0
@@ -113,8 +116,8 @@ class TestPrecisionAtThreshold:
         precision = (
             true_positives / predicted_positives if predicted_positives > 0 else 1.0
         )
-        assert precision > 0.80, (
-            f"Precision {precision:.4f} < 0.80 at threshold {threshold} "
+        assert precision > 0.85, (
+            f"Precision {precision:.4f} < 0.85 at threshold {threshold} "
             f"({true_positives}/{predicted_positives} true positives)"
         )
 

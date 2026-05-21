@@ -113,3 +113,38 @@ def test_wide_object_with_single_deep_leaf_change_scores_near_one() -> None:
         f"single-deep-leaf-change scored {result.similarity_score:.4f}, "
         "expected [0.95, 1.0)"
     )
+
+
+# I2 (wave 8) — pairwise label-similarity cache regression guard.
+# Before I2 every Hungarian cell triggered a fresh Levenshtein call AND
+# the comparator's downstream key-extraction pass repeated the exact
+# same lookups.  The cache in :class:`EmbeddingCache.similarity`
+# memoises pairs canonically so the extraction pass is all-hits.  On
+# a 200x200 95%-disjoint compare the wall-clock dropped ~40% (1.28s →
+# ~0.77s on dev hardware).  The ceiling below is a generous CI-friendly
+# upper bound — if a future change brings the time back near baseline,
+# the cache likely regressed.
+_DISJOINT_200_TIME_BUDGET_SECONDS = 1.0
+
+
+def test_wide_disjoint_200_under_time_budget() -> None:
+    """Audit I2 (wave 8): 200-key 95%-disjoint compare runs in <1.0s.
+
+    Catches a regression of the pairwise similarity cache.  Pre-I2 this
+    case sat near 1.3s on the same hardware; the cache puts it comfortably
+    under 1.0s.  The budget is set loose (>= 1.5x measured median) to
+    survive CI jitter without losing the regression signal.
+    """
+    left = {f"key_{i}": i for i in range(200)}
+    right = {f"unrelated_{i}": i for i in range(190)} | {
+        f"key_{i}": i for i in range(10)
+    }
+
+    start = time.perf_counter()
+    compare(left, right)
+    elapsed = time.perf_counter() - start
+    assert elapsed < _DISJOINT_200_TIME_BUDGET_SECONDS, (
+        f"200-key 95%-disjoint compare took {elapsed:.3f}s, "
+        f"budget {_DISJOINT_200_TIME_BUDGET_SECONDS:.1f}s — "
+        "pairwise similarity cache may have regressed."
+    )

@@ -112,7 +112,18 @@ class STEDConfig:
 
     w_s: float = 0.5
     w_c: float = 0.5
-    lambda_unmatched: float = 0.1
+    # Audit I4 (wave 8): bumped from 0.1 → 0.5.  Wave 7 switched the
+    # normalize_similarity denominator to subtree-size sums; the penalty
+    # term ``lambda * abs(n_left - n_right)`` therefore scales with
+    # subtree-size diff over a denominator of the same units.  At 0.1
+    # the term contributed ~5% of the size diff to the numerator — too
+    # weak to move asymmetric structures off the "almost identical" band
+    # ("half match, half don't" sat near 0.7 instead of the intuitive
+    # ~0.5).  0.5 is the smallest constant that lands the canonical
+    # "double the keys on one side" case at score ~0.5 and brings the
+    # discrimination-corpus Pearson back up.  Pass ``lambda_unmatched=0.1``
+    # explicitly to restore the wave-7 behaviour.
+    lambda_unmatched: float = 0.5
     array_comparison_mode: ArrayComparisonMode = ArrayComparisonMode.ORDERED
     type_coercion: bool = False
     null_equals_missing: bool = False

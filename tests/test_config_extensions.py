@@ -122,9 +122,12 @@ class TestSTEDConfigBackwardCompatibility:
         config = STEDConfig()
         assert config.w_c == 0.5
 
-    def test_default_lambda_unmatched_unchanged(self) -> None:
+    def test_default_lambda_unmatched(self) -> None:
+        # audit I4 (wave 8): default re-calibrated from 0.1 → 0.5 to
+        # match the wave-7 subtree-size denominator.  Test renamed off
+        # "...unchanged" because the value deliberately changed.
         config = STEDConfig()
-        assert config.lambda_unmatched == pytest.approx(0.1)
+        assert config.lambda_unmatched == pytest.approx(0.5)
 
     def test_default_array_comparison_mode_unchanged(self) -> None:
         config = STEDConfig()

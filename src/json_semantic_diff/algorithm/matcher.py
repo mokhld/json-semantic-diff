@@ -18,12 +18,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-from scipy.optimize import linear_sum_assignment  # type: ignore[import-untyped]
 
 from json_semantic_diff.tree.normalizer import KeyNormalizer
 
 if TYPE_CHECKING:
     from json_semantic_diff.protocols import EmbeddingBackend
+
+# Audit P3 (wave 8): scipy is imported lazily inside :func:`hungarian_match`
+# rather than at module load.  scipy pulls a few MB of compiled
+# extensions and easily adds tens of milliseconds to ``import
+# json_semantic_diff`` on cold caches.  Static-only users (no key
+# matching past identity) never need the solver, so they shouldn't
+# pay that cost.
 
 # Module-level singleton — KeyNormalizer is stateless and cheap to share.
 # Used to expand user-supplied alias pairs into a backend-normalised form
@@ -120,6 +126,10 @@ def hungarian_match(
         infinite removed.  Empty arrays are returned when no valid
         assignment exists.
     """
+    # P3 (wave 8): scipy import is deferred to the first call so that
+    # static-only consumers don't pay the ~10-30 ms cold-import cost.
+    from scipy.optimize import linear_sum_assignment  # type: ignore[import-untyped]
+
     if cost_matrix.size == 0:
         return np.array([], dtype=int), np.array([], dtype=int)
 
