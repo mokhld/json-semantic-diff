@@ -185,3 +185,62 @@ def test_similarity_method_present_and_in_range() -> None:
     assert 0.0 <= score_self <= 1.0
     assert 0.0 <= score_diff <= 1.0
     assert score_self >= score_diff
+
+
+# ---------------------------------------------------------------------------
+# Offline / cache_dir support
+# ---------------------------------------------------------------------------
+
+
+def test_cache_dir_accepted(tmp_path: object) -> None:
+    """FastEmbedBackend(cache_dir=tmp_path) constructs without raising."""
+    from pathlib import Path as _Path
+
+    assert isinstance(tmp_path, _Path)
+    backend_cached = FastEmbedBackend(cache_dir=tmp_path)
+    # Smoke-check the backend actually works with a custom cache.
+    result = backend_cached.embed(["hello"])
+    assert result.shape == (1, 384)
+    assert result.dtype == np.float32
+
+
+def test_cache_dir_accepts_str(tmp_path: object) -> None:
+    """cache_dir accepts a plain ``str`` as well as a ``Path``."""
+    from pathlib import Path as _Path
+
+    assert isinstance(tmp_path, _Path)
+    backend_cached = FastEmbedBackend(cache_dir=str(tmp_path))
+    assert backend_cached.model_name == "sentence-transformers/all-MiniLM-L6-v2"
+
+
+def test_local_files_only_unknown_cache_raises_helpful_error(
+    tmp_path: object,
+) -> None:
+    """local_files_only=True against an empty cache raises a clear error.
+
+    The error message must name the model and the cache directory, and steer
+    the user toward either flipping the flag off or pre-caching the model.
+    """
+    from pathlib import Path as _Path
+
+    assert isinstance(tmp_path, _Path)
+    empty_cache = tmp_path / "empty_offline_cache"
+    empty_cache.mkdir()
+
+    with pytest.raises(ValueError) as excinfo:
+        FastEmbedBackend(
+            cache_dir=empty_cache,
+            local_files_only=True,
+        )
+    msg = str(excinfo.value)
+    assert "local_files_only=False" in msg
+    assert "pre-cache" in msg
+    assert str(empty_cache) in msg
+
+
+def test_default_construction_unchanged() -> None:
+    """No-kwargs construction still works (backward-compatible default)."""
+    backend_default = FastEmbedBackend()
+    assert backend_default.model_name == "sentence-transformers/all-MiniLM-L6-v2"
+    result = backend_default.embed(["smoke"])
+    assert result.shape == (1, 384)

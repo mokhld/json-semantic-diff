@@ -40,6 +40,35 @@ if TYPE_CHECKING:
 __all__ = ["STEDComparator"]
 
 
+def _path_matches(pattern: str, path: str) -> bool:
+    """Return True if ``path`` matches ``pattern``.
+
+    Both ``pattern`` and ``path`` are JSON-Pointer-style strings ("/a/b/c").
+    A single ``*`` component in ``pattern`` matches exactly one path component
+    in ``path`` (no partial-component glob matching, no multi-component
+    wildcards).  Component counts must match exactly — this is a key-level
+    selector, not a prefix match.
+
+    Args:
+        pattern: Configured ignore-path pattern (already validated by
+            :func:`STEDConfig._validate_ignore_path`).
+        path:    Candidate JSON Pointer path for a dict key.
+
+    Returns:
+        True if every component lines up, False otherwise.
+    """
+    pat_parts = pattern.split("/")[1:]
+    path_parts = path.split("/")[1:]
+    if len(pat_parts) != len(path_parts):
+        return False
+    for p, c in zip(pat_parts, path_parts, strict=True):
+        if p == "*":
+            continue
+        if p != c:
+            return False
+    return True
+
+
 class STEDComparator:
     """Orchestrator for semantic JSON comparison.
 
@@ -195,16 +224,24 @@ class STEDComparator:
     # ------------------------------------------------------------------
 
     def _preprocess(self, value: Any) -> Any:
-        """Return a fresh copy of ``value``, optionally stripping None-valued keys.
+        """Return a fresh copy of ``value``, applying configured preprocessing.
 
         Always returns a freshly constructed structure for ``dict`` and ``list``
         inputs — the caller never sees a reference to the original container.
-        This guarantees that comparison is non-mutating regardless of
-        ``null_equals_missing``.
+        This guarantees that comparison is non-mutating regardless of which
+        preprocessing options are enabled.
 
-        When ``self._config.null_equals_missing`` is True, recursively removes
-        any dict entry whose value is None, so that ``{"x": None}`` becomes
-        ``{}`` and therefore compares as identical to ``{}``.
+        Preprocessing applied (in order):
+
+        1. ``null_equals_missing``: when True, recursively removes any dict
+           entry whose value is None so ``{"x": None}`` becomes ``{}``.
+        2. ``ignore_paths``: any object key whose path matches one of the
+           configured patterns is dropped from its parent object.  Patterns
+           are matched against the JSON Pointer path the key would have in
+           the resulting tree (e.g. ``/users/0/id``); single-component ``*``
+           wildcards in patterns match exactly one path component.  Array
+           elements themselves are never removed — patterns are applied at
+           the key level only.
 
         Args:
             value: Any valid JSON value.
@@ -213,16 +250,35 @@ class STEDComparator:
             A fresh structure mirroring ``value`` (immutable scalars are
             returned as-is — they cannot be mutated).
         """
+        return self._preprocess_inner(value, path="")
+
+    def _preprocess_inner(self, value: Any, path: str) -> Any:
+        """Recursive worker for ``_preprocess`` that threads the current path."""
         strip_nones = self._config.null_equals_missing
+        ignore_paths = self._config.ignore_paths
 
         if isinstance(value, dict):
-            return {
-                k: self._preprocess(v)
-                for k, v in value.items()
-                if not (strip_nones and v is None)
-            }
+            out: dict[str, Any] = {}
+            for k, v in value.items():
+                if strip_nones and v is None:
+                    continue
+                # Only consider string keys for path matching; non-string
+                # keys (which TreeBuilder later rejects) are passed through
+                # unchanged so the rejection still surfaces with the original
+                # error message.
+                if isinstance(k, str):
+                    child_path = f"{path}/{k}"
+                    if any(_path_matches(p, child_path) for p in ignore_paths):
+                        continue
+                    out[k] = self._preprocess_inner(v, child_path)
+                else:
+                    out[k] = self._preprocess_inner(v, path)
+            return out
         if isinstance(value, list):
-            return [self._preprocess(item) for item in value]
+            return [
+                self._preprocess_inner(item, f"{path}/{idx}")
+                for idx, item in enumerate(value)
+            ]
         return value
 
     # ------------------------------------------------------------------

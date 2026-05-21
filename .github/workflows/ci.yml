@@ -72,6 +72,36 @@ jobs:
       - run: poetry install --no-interaction --with dev
       - run: poetry run pytest
 
+  test-extras:
+    name: Test (extras)
+    # Exercises the optional backends (fastembed, openai, langsmith, braintrust,
+    # weave) that are otherwise silently skipped via ``pytest.importorskip`` in
+    # the base ``test`` job. Single OS + lowest supported Python (3.11) — the
+    # full matrix would be overkill for platform-agnostic pure-Python extras.
+    #
+    # TODO(ci): fastembed performs a real ONNX model download from HuggingFace
+    # on first ``FastEmbedBackend()`` instantiation (tests/backends/test_fastembed.py).
+    # ``continue-on-error: true`` keeps the PR signal green while we observe
+    # how reliable that download is in GH Actions. Flip to ``false`` once the
+    # job has been stable for ~2 weeks (or pre-cache the model).
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      - uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-test-extras-py3.11-${{ hashFiles('poetry.lock') }}
+      - run: poetry install --no-interaction --with dev --extras "fastembed openai langsmith braintrust weave"
+      - run: poetry run pytest tests/backends tests/integration -q --tb=short
+
   benchmark:
     name: Benchmarks (optional)
     # Only runs on manual dispatch or the weekly schedule — never on PRs.

@@ -33,11 +33,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-fastembed = ["fastembed>=0.3"]
+fastembed = ["fastembed>=0.7,<1.0"]
 openai = ["openai>=1.0", "tenacity>=9.0"]
 langsmith = ["langsmith>=0.1"]
 braintrust = ["braintrust>=0.0.100"]
 weave = ["weave>=0.50"]
+all = [
+    "fastembed>=0.7,<1.0",
+    "openai>=1.0",
+    "tenacity>=9.0",
+    "langsmith>=0.1",
+    "braintrust>=0.0.100",
+    "weave>=0.50",
+]
+
+[project.scripts]
+json-semantic-diff = "json_semantic_diff._cli:main"
 
 [project.entry-points.pytest11]
 json-semantic-diff = "json_semantic_diff.integrations._pytest_plugin"
@@ -55,6 +66,7 @@ ruff = ">=0.15"
 pre-commit = ">=3.6"
 types-cachetools = "^6.2.0.20251022"
 pytest-benchmark = "^5.2.3"
+hypothesis = "^6.0"
 
 [tool.ruff]
 line-length = 88
@@ -121,7 +133,7 @@ testpaths = ["tests"]
 # Benchmarks live in tests/benchmarks and use pytest-benchmark; they are
 # excluded from default runs so CI stays fast. Run them explicitly with
 # `pytest tests/benchmarks --benchmark-only` (see the optional benchmark CI job).
-norecursedirs = ["tests/benchmarks"]
+norecursedirs = ["tests/benchmarks", ".hypothesis"]
 addopts = ["--import-mode=importlib"]
 markers = [
     "benchmark: performance benchmark (excluded from default runs)",

@@ -215,3 +215,88 @@ class TestTypeCoercionInContentDistance:
         node_b = make_scalar("123")
         config = STEDConfig(type_coercion=True)
         assert _content_distance(node_a, node_b, config) == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# ignore_paths configuration
+# ---------------------------------------------------------------------------
+
+
+class TestIgnorePathsDefaults:
+    def test_ignore_paths_default_empty_tuple(self) -> None:
+        config = STEDConfig()
+        assert config.ignore_paths == ()
+
+    def test_ignore_paths_default_is_tuple_type(self) -> None:
+        config = STEDConfig()
+        assert isinstance(config.ignore_paths, tuple)
+
+
+class TestIgnorePathsConstruction:
+    def test_ignore_paths_single_pattern(self) -> None:
+        config = STEDConfig(ignore_paths=("/timestamp",))
+        assert config.ignore_paths == ("/timestamp",)
+
+    def test_ignore_paths_multiple_patterns(self) -> None:
+        config = STEDConfig(ignore_paths=("/timestamp", "/users/*/id"))
+        assert config.ignore_paths == ("/timestamp", "/users/*/id")
+
+    def test_ignore_paths_with_wildcard(self) -> None:
+        config = STEDConfig(ignore_paths=("/users/*/id",))
+        assert config.ignore_paths == ("/users/*/id",)
+
+    def test_ignore_paths_nested_pattern(self) -> None:
+        config = STEDConfig(ignore_paths=("/meta/version/number",))
+        assert config.ignore_paths == ("/meta/version/number",)
+
+
+class TestIgnorePathsFrozen:
+    def test_ignore_paths_is_frozen(self) -> None:
+        config = STEDConfig(ignore_paths=("/x",))
+        with pytest.raises(FrozenInstanceError):
+            config.ignore_paths = ("/y",)  # type: ignore[misc]
+
+
+class TestIgnorePathsValidation:
+    def test_missing_leading_slash_raises(self) -> None:
+        with pytest.raises(ValueError, match="must start with '/'"):
+            STEDConfig(ignore_paths=("timestamp",))
+
+    def test_trailing_slash_raises(self) -> None:
+        with pytest.raises(ValueError, match="must not end with '/'"):
+            STEDConfig(ignore_paths=("/timestamp/",))
+
+    def test_root_only_raises(self) -> None:
+        with pytest.raises(ValueError, match="not a valid target"):
+            STEDConfig(ignore_paths=("/",))
+
+    def test_empty_string_raises(self) -> None:
+        with pytest.raises(ValueError, match="must start with '/'"):
+            STEDConfig(ignore_paths=("",))
+
+    def test_empty_component_raises(self) -> None:
+        with pytest.raises(ValueError, match="empty path component"):
+            STEDConfig(ignore_paths=("/a//b",))
+
+    def test_non_string_entry_raises_type_error(self) -> None:
+        with pytest.raises(TypeError, match="must be strings"):
+            STEDConfig(ignore_paths=(123,))  # type: ignore[arg-type]
+
+    def test_non_tuple_ignore_paths_raises_type_error(self) -> None:
+        with pytest.raises(TypeError, match="must be a tuple"):
+            STEDConfig(ignore_paths=["/timestamp"])  # type: ignore[arg-type]
+
+    def test_multiple_patterns_one_bad_raises(self) -> None:
+        with pytest.raises(ValueError, match="must start with '/'"):
+            STEDConfig(ignore_paths=("/ok", "no_slash"))
+
+
+class TestIgnorePathsHashable:
+    def test_config_with_ignore_paths_still_hashable(self) -> None:
+        config = STEDConfig(ignore_paths=("/timestamp", "/users/*/id"))
+        assert isinstance(hash(config), int)
+
+    def test_equal_ignore_paths_configs_equal(self) -> None:
+        c1 = STEDConfig(ignore_paths=("/timestamp",))
+        c2 = STEDConfig(ignore_paths=("/timestamp",))
+        assert c1 == c2

@@ -267,3 +267,157 @@ class TestStatelessness:
         for _ in range(5):
             result = cmp.compare({"x": 42}, {"x": 42})
             assert result.computation_time_ms > 0.0
+
+
+# ---------------------------------------------------------------------------
+# ignore_paths
+# ---------------------------------------------------------------------------
+
+
+class TestIgnorePaths:
+    def test_default_empty_ignore_paths_is_noop(self) -> None:
+        """Default config has ignore_paths=() — behaviour unchanged."""
+        cmp_default = STEDComparator()
+        cmp_explicit = STEDComparator(config=STEDConfig(ignore_paths=()))
+        r_default = cmp_default.compare({"a": 1, "b": 2}, {"a": 1, "c": 3})
+        r_explicit = cmp_explicit.compare({"a": 1, "b": 2}, {"a": 1, "c": 3})
+        assert r_default.similarity_score == pytest.approx(r_explicit.similarity_score)
+        assert r_default.matched_pairs == r_explicit.matched_pairs
+        assert r_default.unmatched_left == r_explicit.unmatched_left
+        assert r_default.unmatched_right == r_explicit.unmatched_right
+
+    def test_ignore_paths_top_level_volatile_key(self) -> None:
+        """Differing /timestamp values are ignored — score should be 1.0."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/timestamp",)))
+        result = cmp.compare(
+            {"a": 1, "timestamp": "2024-01-01T00:00:00Z"},
+            {"a": 1, "timestamp": "2026-05-21T12:34:56Z"},
+        )
+        assert result.similarity_score == pytest.approx(1.0, abs=1e-9)
+
+    def test_ignore_paths_top_level_volatile_key_without_ignore_lower_score(
+        self,
+    ) -> None:
+        """Without ignore_paths the differing timestamp drags score below 1.0."""
+        cmp = STEDComparator()
+        result = cmp.compare(
+            {"a": 1, "timestamp": "2024-01-01T00:00:00Z"},
+            {"a": 1, "timestamp": "2026-05-21T12:34:56Z"},
+        )
+        assert result.similarity_score < 1.0
+
+    def test_ignore_paths_with_array_wildcard(self) -> None:
+        """/users/*/id strips id from every user in the array."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/users/*/id",)))
+        left = {
+            "users": [
+                {"id": "u-001", "name": "Alice"},
+                {"id": "u-002", "name": "Bob"},
+            ]
+        }
+        right = {
+            "users": [
+                {"id": "u-999", "name": "Alice"},
+                {"id": "u-998", "name": "Bob"},
+            ]
+        }
+        result = cmp.compare(left, right)
+        assert result.similarity_score == pytest.approx(1.0, abs=1e-9)
+
+    def test_ignore_paths_multiple_patterns_combine_with_or(self) -> None:
+        """Several patterns: each match is dropped independently."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/timestamp", "/version")))
+        left = {"a": 1, "timestamp": "t1", "version": "v1"}
+        right = {"a": 1, "timestamp": "t2", "version": "v2"}
+        result = cmp.compare(left, right)
+        assert result.similarity_score == pytest.approx(1.0, abs=1e-9)
+
+    def test_ignore_paths_bad_pattern_raises_at_config_construction(self) -> None:
+        """Pattern validation runs in STEDConfig.__post_init__."""
+        with pytest.raises(ValueError):
+            STEDConfig(ignore_paths=("no_slash",))
+
+    def test_ignored_path_not_in_unmatched(self) -> None:
+        """Ignored keys should not appear in unmatched_left/unmatched_right."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/secret",)))
+        result = cmp.compare(
+            {"a": 1, "secret": "left-only"},
+            {"a": 1},
+        )
+        # secret is dropped from left before comparison — neither side reports it
+        all_paths = (
+            list(result.unmatched_left)
+            + list(result.unmatched_right)
+            + [p for pair in result.matched_pairs for p in pair]
+        )
+        assert all("secret" not in p for p in all_paths)
+
+    def test_ignored_path_not_in_key_mappings(self) -> None:
+        """Ignored keys should not appear in key_mappings either."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/timestamp",)))
+        result = cmp.compare({"a": 1, "timestamp": "t1"}, {"a": 1, "timestamp": "t2"})
+        assert "timestamp" not in result.key_mappings
+        assert "timestamp" not in result.key_mappings.values()
+
+    def test_ignore_paths_does_not_mutate_inputs(self) -> None:
+        """_preprocess must keep returning fresh structures — verify inputs unchanged."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/timestamp",)))
+        left = {"a": 1, "timestamp": "t1"}
+        right = {"a": 1, "timestamp": "t2"}
+        left_snapshot = {"a": 1, "timestamp": "t1"}
+        right_snapshot = {"a": 1, "timestamp": "t2"}
+        cmp.compare(left, right)
+        assert left == left_snapshot
+        assert right == right_snapshot
+
+    def test_ignore_paths_does_not_mutate_nested_inputs(self) -> None:
+        """Nested dicts inside the ignored subtree are not mutated either."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/meta",)))
+        meta = {"version": 1, "build": "abc"}
+        left = {"a": 1, "meta": meta}
+        cmp.compare(left, {"a": 1})
+        # The meta sub-dict on the original input is untouched
+        assert meta == {"version": 1, "build": "abc"}
+        assert left["meta"] is meta
+
+    def test_ignore_paths_nested_subtree_removed(self) -> None:
+        """/meta removes the whole meta subtree from both sides."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/meta",)))
+        left = {"a": 1, "meta": {"version": "v1", "build": "abc"}}
+        right = {"a": 1, "meta": {"version": "v2", "build": "xyz"}}
+        result = cmp.compare(left, right)
+        assert result.similarity_score == pytest.approx(1.0, abs=1e-9)
+        assert "meta" not in result.key_mappings
+
+    def test_ignore_paths_nested_subtree_one_side_missing(self) -> None:
+        """/meta absent on right is fine — ignored on left, no penalty."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/meta",)))
+        left = {"a": 1, "meta": {"version": "v1"}}
+        right = {"a": 1}
+        result = cmp.compare(left, right)
+        assert result.similarity_score == pytest.approx(1.0, abs=1e-9)
+
+    def test_ignore_paths_pattern_does_not_match_unrelated_key(self) -> None:
+        """/timestamp must NOT match /timestamps (no partial-component matching)."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/timestamp",)))
+        result = cmp.compare(
+            {"a": 1, "timestamps": ["t1"]}, {"a": 1, "timestamps": ["t2"]}
+        )
+        # Score should be less than 1 because /timestamps was NOT ignored
+        assert result.similarity_score < 1.0
+
+    def test_ignore_paths_pattern_does_not_match_deeper_path(self) -> None:
+        """/x must NOT match /y/x — patterns are full-path, not suffix."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/x",)))
+        result = cmp.compare({"y": {"x": "left"}}, {"y": {"x": "right"}})
+        # /y/x is NOT matched by /x, so the differing values still count
+        assert result.similarity_score < 1.0
+
+    def test_ignore_paths_wildcard_matches_object_key_too(self) -> None:
+        """A single `*` component matches any single component (dict key or index)."""
+        cmp = STEDComparator(config=STEDConfig(ignore_paths=("/users/*/id",)))
+        # users is a dict here (keyed by username), not an array — wildcard still works
+        left = {"users": {"alice": {"id": "a1", "name": "Alice"}}}
+        right = {"users": {"alice": {"id": "a2", "name": "Alice"}}}
+        result = cmp.compare(left, right)
+        assert result.similarity_score == pytest.approx(1.0, abs=1e-9)

@@ -55,6 +55,11 @@ def compare(
     Creates a fresh ``STEDComparator`` per call to guarantee zero global state
     mutation between calls.
 
+    To exclude volatile keys (timestamps, generated ids, version numbers) from
+    the comparison, pass ``STEDConfig(ignore_paths=("/timestamp", "/users/*/id"))``.
+    See :class:`json_semantic_diff.algorithm.config.STEDConfig` for the full
+    pattern syntax.
+
     Args:
         left:   First JSON value (dict, list, str, int, float, bool, None).
         right:  Second JSON value.
@@ -63,13 +68,16 @@ def compare(
     Returns:
         A ``ComparisonResult`` with similarity_score, matched_pairs, key_mappings,
         unmatched_left, unmatched_right, and computation_time_ms populated.
+        Paths in ``ignore_paths`` are stripped before tree construction, so they
+        will not appear in any of these fields.
 
     Raises:
         TypeError: If ``left`` or ``right`` is not a JSON value (dict, list,
             str, int, float, bool, None).
         ValueError: If ``config`` is provided with invalid weights (e.g.
-            ``w_s + w_c != 1.0`` or ``lambda_unmatched < 0``).  Raised by
-            :class:`STEDConfig` on construction.
+            ``w_s + w_c != 1.0`` or ``lambda_unmatched < 0``) or invalid
+            ``ignore_paths`` patterns.  Raised by :class:`STEDConfig` on
+            construction.
     """
     comparator = STEDComparator(config=config)
     return comparator.compare(left, right)
