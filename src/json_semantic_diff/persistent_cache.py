@@ -25,6 +25,17 @@ S3-FUSE path) to share a cache across machines.
     or moving between OSes may invalidate existing entries — that is fine, the
     cache will simply miss and re-embed.
 
+.. warning::
+
+    ``diskcache`` stores values via Python ``pickle``.  Reading a cache
+    directory whose contents were written by an untrusted party is
+    equivalent to running ``pickle.loads`` on attacker-controlled bytes
+    — **arbitrary code execution**.  Only point ``cache_dir`` at a
+    location that is writable by trusted principals.  Do not share a
+    cache directory across mutually-untrusting tenants on shared
+    filesystems (NFS, S3-FUSE, multi-user CI volumes) without
+    additional integrity controls.  See ``SECURITY.md`` for details.
+
 This module imports ``diskcache`` lazily inside ``__init__`` so the library
 remains an *optional* dependency.  Install it with::
 

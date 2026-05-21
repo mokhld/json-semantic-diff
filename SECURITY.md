@@ -33,6 +33,22 @@ In scope:
 
 ## Out of scope
 
-- **Malicious JSON inputs causing recursion errors / stack overflow.** The current tree builder is recursive, so deeply nested JSON (roughly past Python's default recursion limit, ~1000 levels) will raise `RecursionError`. This is tracked as audit finding H1 and is a known issue. Until the planned iterative-walk fix lands, callers MUST validate input depth (and ideally total node count) before passing untrusted JSON to `compare()` / `similarity_score()`.
+- **Malicious JSON inputs causing recursion errors / stack overflow.** The current tree builder is recursive, so deeply nested JSON (roughly past Python's default recursion limit, ~1000 levels) will raise `RecursionError`. This is tracked as audit finding H1 and is a known issue. Until the planned iterative-walk fix lands, callers MUST validate input depth (and ideally total node count) before passing untrusted JSON to `compare()` / `similarity_score()`. The CLI applies a 100 MiB hard cap on input bytes and catches `RecursionError` to a clean `exit 2`; library users get no such guard.
 - Resource exhaustion from intentionally pathological inputs (giant arrays, exponential string-length keys). Pre-validate size if you accept untrusted input.
 - Vulnerabilities in third-party dependencies (numpy, scipy, fastembed, openai, etc.) — report those upstream. We will bump pins promptly once upstream fixes ship.
+
+## Trust requirements for optional components
+
+### `PersistentEmbeddingCache` (`pip install json-semantic-diff[diskcache]`)
+
+The persistent cache uses `diskcache`, which stores values via Python `pickle`. Reading a cache directory whose contents were written by an untrusted party is equivalent to running `pickle.loads` on attacker-controlled bytes — **arbitrary code execution** in the process that calls `cache.embed()` or `cache.similarity()`.
+
+Required practice:
+
+- `cache_dir` MUST be a directory only writable by trusted principals on your machine or shared infrastructure.
+- Do **not** share a `cache_dir` across mutually-untrusting tenants on NFS, S3-FUSE, multi-user CI volumes, or any filesystem where another principal could plant a malicious shard file.
+- Per-user, per-host, or per-project cache directories are the safe default. The README example uses `~/.cache/json-semantic-diff/embeddings` for this reason.
+
+### Eval-platform integrations (LangSmith, Braintrust, Weave)
+
+The `integrations/` adapters upload `ComparisonResult` audit-trail fields — `key_mappings`, `unmatched_left`, `unmatched_right`, and `computation_time_ms` — to the third-party platform each time a score is recorded. JSON Pointer paths in those fields contain **raw key names from your data** (e.g. `/users/0/email`, `/payment/card_number`). If your JSON keys themselves are sensitive, wrap or redact the adapter output before evaluation.

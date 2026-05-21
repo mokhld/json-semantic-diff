@@ -35,7 +35,7 @@ from json_semantic_diff.algorithm.sted import STEDAlgorithm
 from json_semantic_diff.backends import StaticBackend
 from json_semantic_diff.cache import EmbeddingCache
 from json_semantic_diff.result import ComparisonResult
-from json_semantic_diff.tree.builder import TreeBuilder
+from json_semantic_diff.tree.builder import TreeBuilder, _escape_path_segment
 from json_semantic_diff.tree.nodes import NodeType, TreeNode
 
 if TYPE_CHECKING:
@@ -288,7 +288,12 @@ class STEDComparator:
                 # unchanged so the rejection still surfaces with the original
                 # error message.
                 if isinstance(k, str):
-                    child_path = f"{path}/{k}"
+                    # RFC 6901: escape key segments so ignore_paths patterns
+                    # match the same canonical paths the tree builder emits.
+                    # Without this, a literal key "a/b" would silently fail to
+                    # be ignored by pattern "/a~1b" because the path was built
+                    # as "/a/b" (ambiguous with nesting).
+                    child_path = f"{path}/{_escape_path_segment(k)}"
                     if any(_path_matches(p, child_path) for p in ignore_paths):
                         continue
                     out[k] = self._preprocess_inner(v, child_path)

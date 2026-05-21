@@ -13,12 +13,13 @@ from json_semantic_diff.api import (
     similarity_score,
 )
 from json_semantic_diff.comparator import STEDComparator
-from json_semantic_diff.result import ComparisonResult
+from json_semantic_diff.result import ComparisonResult, NodeContribution
 
 __version__: str = "0.1.0"
 __all__: list[str] = [
     "ArrayComparisonMode",
     "ComparisonResult",
+    "NodeContribution",
     "STEDComparator",
     "STEDConfig",
     "compare",

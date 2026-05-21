@@ -25,8 +25,10 @@ class TestCompareExample:
             {"user_name": "Alice", "email_address": "alice@corp.com"},
             {"userName": "Alice", "mailAddress": "alice@corp.com"},
         )
-        # README claims "~0.98"; pin to the actual value.
-        assert result.similarity_score == pytest.approx(0.9807692307692308, abs=1e-9)
+        # README claims "~0.98".  Use README's precision (abs=0.01) so a
+        # benign algorithm refinement that still satisfies the documented
+        # contract does not fail the test (test_readme review finding T3).
+        assert result.similarity_score == pytest.approx(0.98, abs=0.01)
         assert result.key_mappings == {
             "user_name": "userName",
             "email_address": "mailAddress",

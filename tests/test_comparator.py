@@ -533,3 +533,57 @@ class TestAliases:
         # enough that they should not both be matched together by the
         # StaticBackend at the default threshold.
         assert ("uid", "user_id") in result.key_mappings.items()
+
+
+# ---------------------------------------------------------------------------
+# Regression: ignore_paths RFC 6901 escape
+# ---------------------------------------------------------------------------
+
+
+class TestIgnorePathsRFC6901Escape:
+    """ignore_paths patterns match keys containing '/' or '~' per RFC 6901.
+
+    Regression for the review finding that comparator._preprocess_inner
+    built paths with raw key names while tree/builder escapes them, so
+    ignore_paths silently failed to match any key containing '/' or '~'.
+    """
+
+    def test_ignore_path_with_slash_in_key(self) -> None:
+        """A pattern '/a~1b' matches the literal key 'a/b'."""
+        cfg = STEDConfig(ignore_paths=("/a~1b",))
+        cmp = STEDComparator(config=cfg)
+        # Differ only in the ignored key — score must be 1.0.
+        left = {"a/b": "before", "kept": 1}
+        right = {"a/b": "after", "kept": 1}
+        assert cmp.compare(left, right).similarity_score == pytest.approx(1.0)
+
+    def test_ignore_path_with_tilde_in_key(self) -> None:
+        """A pattern '/a~0b' matches the literal key 'a~b'."""
+        cfg = STEDConfig(ignore_paths=("/a~0b",))
+        cmp = STEDComparator(config=cfg)
+        left = {"a~b": "before", "kept": 1}
+        right = {"a~b": "after", "kept": 1}
+        assert cmp.compare(left, right).similarity_score == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Regression: max_depth identical deep subtrees
+# ---------------------------------------------------------------------------
+
+
+class TestMaxDepthDeepIdenticals:
+    """max_depth cap must not make identical deep subtrees score badly.
+
+    Regression for the review finding that the cap returned a flat 2.0
+    regardless of subtree size, causing is_equivalent to be falsely False
+    for deep-but-identical inputs.
+    """
+
+    def test_identical_deep_subtree_under_cap_scores_high(self) -> None:
+        """{a:{b:{c:{d:1}}}} compared to itself with max_depth=2 stays near 1.0."""
+        cfg = STEDConfig(max_depth=2)
+        cmp = STEDComparator(config=cfg)
+        deep = {"a": {"b": {"c": {"d": 1}}}}
+        # Identical inputs under a depth cap should still score very high
+        # (the cap declines further work but should not invent disagreement).
+        assert cmp.compare(deep, deep).similarity_score >= 0.5

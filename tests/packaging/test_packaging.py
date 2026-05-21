@@ -218,6 +218,7 @@ class TestPackageMetadata:
         expected = {
             "ArrayComparisonMode",
             "ComparisonResult",
+            "NodeContribution",
             "STEDComparator",
             "STEDConfig",
             "compare",

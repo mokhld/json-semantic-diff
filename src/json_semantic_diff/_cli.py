@@ -120,6 +120,12 @@ def _get_version() -> str:
         return "unknown"
 
 
+# Defensive cap on input size — refuses pathological inputs before they
+# exhaust memory.  Users with larger documents can opt out by piping through
+# `--` and constructing STEDComparator directly in Python.
+_MAX_INPUT_BYTES = 100 * 1024 * 1024  # 100 MiB
+
+
 def _read_json(
     path: str,
     *,
@@ -134,12 +140,27 @@ def _read_json(
     label = "<stdin>" if path == "-" else path
     try:
         if path == "-":
-            text = stdin.read()
+            text = stdin.read(_MAX_INPUT_BYTES + 1)
+            if len(text) > _MAX_INPUT_BYTES:
+                print(
+                    f"error: <stdin> exceeds {_MAX_INPUT_BYTES} byte limit",
+                    file=stderr,
+                )
+                return None, 2
         else:
             with open(path, encoding="utf-8") as fh:
-                text = fh.read()
+                text = fh.read(_MAX_INPUT_BYTES + 1)
+                if len(text) > _MAX_INPUT_BYTES:
+                    print(
+                        f"error: {label} exceeds {_MAX_INPUT_BYTES} byte limit",
+                        file=stderr,
+                    )
+                    return None, 2
     except OSError as exc:
         print(f"error: cannot read {label}: {exc.strerror or exc}", file=stderr)
+        return None, 2
+    except UnicodeDecodeError as exc:
+        print(f"error: {label} is not valid UTF-8: {exc.reason}", file=stderr)
         return None, 2
 
     try:
@@ -203,20 +224,34 @@ def main(argv: list[str] | None = None) -> int:
             equivalent = is_equivalent(
                 left, right, threshold=args.threshold, config=config
             )
-        except ValueError as exc:
+            if args.verbose:
+                # Re-run compare to surface the actual score; cheap relative
+                # to threshold-only path's value to humans debugging.
+                result = compare(left, right, config=config)
+                print(result.similarity_score, file=stdout)
+        except (TypeError, ValueError) as exc:
             print(f"error: {exc}", file=stderr)
             return 2
-        if args.verbose:
-            # Re-run compare to surface the actual score; cheap relative to
-            # threshold-only path's value to humans debugging.
-            result = compare(left, right, config=config)
-            print(result.similarity_score, file=stdout)
+        except RecursionError:
+            print(
+                "error: input nesting exceeds Python recursion limit "
+                "(known issue, audit H1)",
+                file=stderr,
+            )
+            return 2
         return 0 if equivalent else 1
 
     try:
         result = compare(left, right, config=config)
     except (TypeError, ValueError) as exc:
         print(f"error: {exc}", file=stderr)
+        return 2
+    except RecursionError:
+        print(
+            "error: input nesting exceeds Python recursion limit "
+            "(known issue, audit H1)",
+            file=stderr,
+        )
         return 2
 
     if args.json_output:

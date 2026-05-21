@@ -38,6 +38,28 @@ if TYPE_CHECKING:
     from json_semantic_diff.protocols import EmbeddingBackend
 
 
+def _trees_equal(a: TreeNode, b: TreeNode) -> bool:
+    """Structural equality check used by the max_depth cap.
+
+    Iterative DFS comparing node_type, label, value, and child count at
+    every position.  Returns False on the first mismatch.  Cheap (linear
+    in min(subtree_size_a, subtree_size_b)) and recursion-safe.
+    """
+    stack: list[tuple[TreeNode, TreeNode]] = [(a, b)]
+    while stack:
+        na, nb = stack.pop()
+        if na.node_type != nb.node_type:
+            return False
+        if na.label != nb.label:
+            return False
+        if na.value != nb.value:
+            return False
+        if len(na.children) != len(nb.children):
+            return False
+        stack.extend(zip(na.children, nb.children, strict=True))
+    return True
+
+
 class STEDAlgorithm:
     """Recursive STED algorithm for JSON semantic similarity.
 
@@ -308,13 +330,18 @@ class STEDAlgorithm:
         sub-trees still hit the cache.
         """
         # Max-depth cap: short-circuit before any structural work so deep
-        # sub-trees do not pay traversal cost.  We charge the standard
-        # "unrelated pair" cost (delete + insert) — equivalent to declining
-        # to compare further.  Identical-shape trivial leaves at the cap
-        # still go through their normal cost path below because the cap is
-        # checked *before* recursing into children, not at every node.
+        # sub-trees do not pay traversal cost.  Two cases:
+        #   1. Structurally identical sub-trees -> cost 0 (would have been 0
+        #      anyway after full traversal, but the cap would otherwise
+        #      charge phantom cost).  Cheap shallow check via _trees_equal.
+        #   2. Different sub-trees -> charge the "declined comparison" cost
+        #      of cost_delete + cost_insert = 2.0.  A higher subtree-size
+        #      cost would compound through normalisation and make identical
+        #      siblings under the cap look heavily different.
         max_depth = self._config.max_depth
         if max_depth is not None and depth >= max_depth:
+            if _trees_equal(node_a, node_b):
+                return 0.0
             return cost_delete(node_a) + cost_insert(node_b)
 
         # Type mismatch: full delete of the left subtree + full insert of the
