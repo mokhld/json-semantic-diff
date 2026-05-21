@@ -33,8 +33,7 @@ In scope:
 
 ## Out of scope
 
-- **Malicious JSON inputs causing recursion errors / stack overflow.** The current tree builder is recursive, so deeply nested JSON (roughly past Python's default recursion limit, ~1000 levels) will raise `RecursionError`. This is tracked as audit finding H1 and is a known issue. Until the planned iterative-walk fix lands, callers MUST validate input depth (and ideally total node count) before passing untrusted JSON to `compare()` / `similarity_score()`. The CLI applies a 100 MiB hard cap on input bytes and catches `RecursionError` to a clean `exit 2`; library users get no such guard.
-- Resource exhaustion from intentionally pathological inputs (giant arrays, exponential string-length keys). Pre-validate size if you accept untrusted input.
+- Resource exhaustion from intentionally pathological inputs (giant arrays, exponential string-length keys). Tree construction and the STED walk are both iterative (audit finding H1 fixed in wave 6) so deeply-nested JSON no longer hits `RecursionError`; however, total node count still drives O(n²) Hungarian cost-matrix work per nested OBJECT, and a 1 GiB JSON blob will still exhaust memory before being compared. Pre-validate size if you accept untrusted input.
 - Vulnerabilities in third-party dependencies (numpy, scipy, fastembed, openai, etc.) — report those upstream. We will bump pins promptly once upstream fixes ship.
 
 ## Trust requirements for optional components

@@ -735,25 +735,39 @@ class TestMaxDepth:
 
 
 # ---------------------------------------------------------------------------
-# Deep recursion (T1, xfail until H1 — iterative refactor lands)
+# Deep recursion (T1 — audit H1 fixed in wave 6 by the iterative tree walk)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="audit H1 — fully recursive tree build/walk, iterative refactor pending",
-    strict=False,
-)
 def test_deeply_nested_self_compare_does_not_recursion_error(
     backend: StaticBackend,
 ) -> None:
-    """A pathologically deep JSON should compare without RecursionError.
+    """A pathologically deep JSON compares without RecursionError.
 
-    Today this fails (the tree builder and STED walk are both recursive
-    and blow the C-stack near 1500 levels).  Marked xfail so it auto-flips
-    to passing once H1 (iterative refactor) lands.
+    Before wave 6 both ``TreeBuilder`` and ``STEDAlgorithm`` were fully
+    recursive — a 1500-deep linked-list-shaped JSON blew the C-stack.
+    With the iterative explicit-stack rewrites (H1) we no longer need
+    to raise ``sys.setrecursionlimit``.
     """
     deep = _build_nested_dict(1500, leaf=1)
     deep_copy = _build_nested_dict(1500, leaf=1)
+    algo = STEDAlgorithm(backend=backend)
+    score = algo.compute(deep, deep_copy)
+    assert score == pytest.approx(1.0)
+
+
+def test_extremely_deep_self_compare_scores_one(
+    backend: StaticBackend,
+) -> None:
+    """10,000-deep JSON self-compare must score 1.0 without RecursionError.
+
+    Asserts the iterative walk handles depths far past CPython's default
+    recursion limit (1000) — the original wave 1-5 implementations would
+    have hit ``RecursionError`` twice before reaching the leaf (once in
+    the builder, once in the STED walk).
+    """
+    deep = _build_nested_dict(10_000, leaf=1)
+    deep_copy = _build_nested_dict(10_000, leaf=1)
     algo = STEDAlgorithm(backend=backend)
     score = algo.compute(deep, deep_copy)
     assert score == pytest.approx(1.0)

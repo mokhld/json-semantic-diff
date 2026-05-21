@@ -43,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `fastembed` pinned to `>=0.7,<1.0` to avoid the 0.3 → 0.7 API break; numerous wave-1 algorithm/backend/API correctness fixes from the 2026-05-21 audit (C1, C5, C6 partial, H2, H10, M2, M7, M10, M11, M12, P5, G3, F10 partial, D1, D2, D3, D6, D10, CI2, CI6, T10).
 
 ### Fixed
+- Deep-recursion stack overflow (audit H1): `TreeBuilder` and `STEDAlgorithm._compute_node_distance` are now iterative explicit-stack walks. JSON nested past Python's default `sys.setrecursionlimit` no longer raises `RecursionError` from either tree construction or the STED traversal — a 10 000-deep linked-list-shaped document now compares cleanly. The public API is unchanged; the memoisation cache, depth threading, `max_depth` cap, explain-mode buffer and all scoring semantics are preserved bit-for-bit.
 - `ignore_paths` patterns now correctly match keys containing `/` or `~` — the preprocessing layer now RFC 6901-escapes path segments before testing the pattern, matching the canonical paths emitted by the tree builder (review finding Adv5).
 - `STEDConfig.max_depth` cap no longer scores deep-identical sub-trees as fully different. A shallow structural-equality check at the cap returns cost 0 when both sides are identical and the documented "declined comparison" cost otherwise (review finding M3 + Adv4).
 - Bool / int conflation: `{flag: True}` no longer scores identical to `{flag: 1}` (H2).
@@ -56,7 +57,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Module-level `_DEFAULT_BACKEND = FastEmbedBackend()` singleton in `backends/fastembed.py` — was unused and downloaded the ONNX model on import (C1).
 
 ### Known issues
-- **Deep recursion (H1):** documents nested past ~1000 levels can hit Python's recursion limit during tree construction. An iterative tree-walk rewrite is planned. CLI catches `RecursionError` and exits 2 with a clean message; library users get no such guard. See `SECURITY.md` for input-validation guidance.
 - **PersistentEmbeddingCache trust requirement:** `diskcache` deserialises via `pickle`. `cache_dir` MUST be writable only by trusted principals; do not share across mutually-untrusting tenants. See `SECURITY.md`.
 - OBJECT/ARRAY normalization collapse (C6 full fix), AUTO array-mode symmetry (H9), Hungarian sparsity pre-filter (I2), and `lambda_unmatched` scaling (I4) remain open; see `.planning/AUDIT-2026-05-21.md`.
 

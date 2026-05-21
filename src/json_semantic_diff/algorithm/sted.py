@@ -279,11 +279,26 @@ class STEDAlgorithm:
         - Type mismatch: returns max cost based on the larger node.
 
         Max-depth policy: when ``config.max_depth`` is set and ``depth >=
-        max_depth``, no further recursion happens.  Instead the sub-tree
+        max_depth``, no further traversal happens.  Instead the sub-tree
         contributes ``cost_delete + cost_insert`` (= 2.0) — i.e. the two
         sub-trees are treated as fully unrelated past the cap.  This
         bounds traversal cost at the price of resolution past ``max_depth``
         levels below the roots.
+
+        Implementation note (audit finding H1): this entry point is a thin
+        wrapper around :meth:`_populate_distance_cache`, an iterative
+        explicit-stack post-order DFS.  Pathologically deep JSON (tens of
+        thousands of levels) used to blow the C-stack via mutual recursion
+        between this method, :meth:`_match_children_hungarian` and
+        :meth:`_match_children_sequence`; the iterative walk lifts that
+        ceiling to whatever the heap can hold.
+
+        Memoisation key: ``(id(node_a), id(node_b), depth)``.  Identity is
+        stable for the duration of a single ``compute()`` call — trees are
+        built once then walked read-only.  ``depth`` is part of the key
+        because the ``max_depth`` cap (checked inside the DFS) makes the
+        result depth-dependent; including it is always correct even when
+        ``max_depth is None``.
 
         Args:
             node_a: Left tree node.
@@ -295,99 +310,184 @@ class STEDAlgorithm:
         Returns:
             Non-negative float distance.
         """
-        # Memoisation: Hungarian cost-matrix construction (and ordered DP) call
-        # this for every (m * n) child pair, often visiting the same
-        # (node_a, node_b) repeatedly when keys point at structurally identical
-        # subtrees.  Memoising on ``(id(node_a), id(node_b), depth)`` collapses
-        # the O(n⁴) worst case (audit finding I1) without changing semantics.
-        # ``depth`` is part of the key because the ``max_depth`` cap (checked
-        # below) makes the result depth-dependent; including it is always
-        # correct, even when ``max_depth is None``.
-        # Identity shortcut: same object compared with itself is always 0.0.
-        # (Falls through to the cache so callers still benefit from the
-        # uniform lookup path on repeat queries.)
         cache_key = (id(node_a), id(node_b), depth)
         cached = self._dist_cache.get(cache_key)
         if cached is not None:
             return cached
+        self._populate_distance_cache(node_a, node_b, depth)
+        # ``_populate_distance_cache`` always leaves ``cache_key`` populated
+        # (every branch either short-circuits into the cache or pushes an
+        # exit frame that does).  Returning the stored value (instead of the
+        # in-method computation) keeps a single source of truth.
+        return self._dist_cache[cache_key]
 
-        result = self._compute_node_distance_uncached(node_a, node_b, depth)
-        self._dist_cache[cache_key] = result
-        return result
+    # State tags for ``_populate_distance_cache``'s work stack.  Defined as
+    # module-private ints rather than an ``Enum`` so the tight inner loop
+    # compares cheap integers.
+    _STATE_ENTER = 0
+    _STATE_EXIT = 1
 
-    def _compute_node_distance_uncached(
+    def _populate_distance_cache(
+        self,
+        root_a: TreeNode,
+        root_b: TreeNode,
+        root_depth: int,
+    ) -> None:
+        """Iterative post-order DFS that fills :attr:`_dist_cache`.
+
+        Replaces the previous recursive ``_compute_node_distance_uncached``
+        body.  Each work-stack item is ``(state, node_a, node_b, depth)``:
+
+        * ``_STATE_ENTER`` — first visit.  Either short-circuits the result
+          straight into the cache (SCALAR, type-mismatch, max_depth cap,
+          empty containers) or schedules an EXIT frame plus one ENTER
+          frame per child pair whose distance the parent will need.
+        * ``_STATE_EXIT`` — re-popped after every descendant's EXIT has
+          run, so all child distances are guaranteed to be in the cache.
+          Delegates to :meth:`_compute_node_distance_post` for the final
+          per-node arithmetic (which, for OBJECT/ARRAY, invokes
+          Hungarian / sequence matching and records explain contributions).
+
+        The ENTER/EXIT trick gives post-order semantics with an explicit
+        stack — the same shape the recursive implementation had on the
+        Python call stack, but without the C-stack ceiling.
+        """
+        # Local rebinds keep the hot loop branch-light.
+        cache = self._dist_cache
+        max_depth = self._config.max_depth
+        ENTER = STEDAlgorithm._STATE_ENTER
+        EXIT = STEDAlgorithm._STATE_EXIT
+        backend = self._backend
+        config = self._config
+
+        stack: list[tuple[int, TreeNode, TreeNode, int]] = [
+            (ENTER, root_a, root_b, root_depth)
+        ]
+
+        while stack:
+            state, na, nb, dep = stack.pop()
+            cache_key = (id(na), id(nb), dep)
+
+            if state == EXIT:
+                # A duplicate ENTER may have raced ahead and already
+                # populated the key (e.g. a shared subtree appearing under
+                # two siblings); only run the post-children arithmetic
+                # once so explain-mode contributions aren't double-counted.
+                if cache_key in cache:
+                    continue
+                cache[cache_key] = self._compute_node_distance_post(na, nb, dep)
+                continue
+
+            # state == ENTER
+            if cache_key in cache:
+                continue
+
+            # 1. Max-depth cap — fully skips descendants past the threshold.
+            if max_depth is not None and dep >= max_depth:
+                if _trees_equal(na, nb):
+                    cache[cache_key] = 0.0
+                else:
+                    cache[cache_key] = cost_delete(na) + cost_insert(nb)
+                continue
+
+            # 2. Type mismatch — full delete + insert, scaled by subtree size
+            #    so the cost dominates a single-scalar swap during matching.
+            if na.node_type != nb.node_type:
+                cache[cache_key] = float(max(subtree_size(na), subtree_size(nb)))
+                continue
+
+            node_type = na.node_type
+
+            # 3. SCALAR — leaf, no children to recurse into.
+            if node_type == NodeType.SCALAR:
+                cache[cache_key] = cost_update(na, nb, backend, config)
+                continue
+
+            # 4. KEY / ELEMENT — single value-child to schedule.
+            if node_type == NodeType.KEY or node_type == NodeType.ELEMENT:
+                if na.children and nb.children:
+                    # Both sides have a value child: schedule EXIT followed
+                    # by ENTER for the value pair.  Pushing EXIT first means
+                    # LIFO pops it LAST (after the child's EXIT has run).
+                    stack.append((EXIT, na, nb, dep))
+                    child_a = na.children[0]
+                    child_b = nb.children[0]
+                    child_key = (id(child_a), id(child_b), dep + 1)
+                    if child_key not in cache:
+                        stack.append((ENTER, child_a, child_b, dep + 1))
+                    continue
+                # Malformed / empty: no child distance needed, compute now.
+                if node_type == NodeType.KEY:
+                    base = cost_update(na, nb, backend, config)
+                else:
+                    base = 0.0
+                # Symmetric empty -> 0 extra; asymmetric -> 1 (insert/delete).
+                extra = 0.0 if (not na.children and not nb.children) else 1.0
+                cache[cache_key] = base + extra
+                continue
+
+            # 5. OBJECT / ARRAY — schedule m*n child pairs at depth + 1.
+            if not na.children and not nb.children:
+                cache[cache_key] = 0.0
+                continue
+            stack.append((EXIT, na, nb, dep))
+            child_depth = dep + 1
+            # Push every child pair; the cache check at ENTER skips
+            # already-computed ones.  Pre-filtering here would allocate
+            # a frozenset of keys for marginal benefit on most inputs.
+            for ca in na.children:
+                for cb in nb.children:
+                    child_key = (id(ca), id(cb), child_depth)
+                    if child_key not in cache:
+                        stack.append((ENTER, ca, cb, child_depth))
+
+    def _compute_node_distance_post(
         self,
         node_a: TreeNode,
         node_b: TreeNode,
         depth: int,
     ) -> float:
-        """Uncached body of ``_compute_node_distance``.
+        """Compute a node-pair distance assuming child distances are cached.
 
-        Split out so the public entry point can do a single cache lookup at
-        the top and a single store at the bottom, instead of threading the
-        cache through every early-return branch.  Recursive calls go back
-        through ``_compute_node_distance`` (the cached entry point) so deeper
-        sub-trees still hit the cache.
+        Called by :meth:`_populate_distance_cache` during the EXIT phase
+        when every recursive sub-distance has already been written to
+        :attr:`_dist_cache`.  All short-circuit branches (max_depth, type
+        mismatch, SCALAR, empty containers, malformed KEY/ELEMENT) are
+        handled in the ENTER phase — by the time we reach here the node
+        is one of:
+
+        * KEY with both sides having a value child;
+        * ELEMENT with both sides having a value child;
+        * OBJECT with at least one side non-empty;
+        * ARRAY with at least one side non-empty.
+
+        For OBJECT/ARRAY this calls into the existing
+        :meth:`_match_children_hungarian` / :meth:`_match_children_sequence`,
+        which run the actual matching and (if explain mode is on) record
+        per-pair contributions.  Those helpers re-enter
+        :meth:`_compute_node_distance` for each cost-matrix cell — those
+        re-entries are guaranteed cache hits because DFS visited every
+        child pair first.
         """
-        # Max-depth cap: short-circuit before any structural work so deep
-        # sub-trees do not pay traversal cost.  Two cases:
-        #   1. Structurally identical sub-trees -> cost 0 (would have been 0
-        #      anyway after full traversal, but the cap would otherwise
-        #      charge phantom cost).  Cheap shallow check via _trees_equal.
-        #   2. Different sub-trees -> charge the "declined comparison" cost
-        #      of cost_delete + cost_insert = 2.0.  A higher subtree-size
-        #      cost would compound through normalisation and make identical
-        #      siblings under the cap look heavily different.
-        max_depth = self._config.max_depth
-        if max_depth is not None and depth >= max_depth:
-            if _trees_equal(node_a, node_b):
-                return 0.0
-            return cost_delete(node_a) + cost_insert(node_b)
-
-        # Type mismatch: full delete of the left subtree + full insert of the
-        # right subtree.  Cost scales with subtree size so a deeply-different
-        # branch correctly outweighs a single-scalar swap during Hungarian /
-        # DP matching.  Using ``max`` (rather than sum) keeps the per-node
-        # contribution proportional to the larger structure being replaced.
-        if node_a.node_type != node_b.node_type:
-            return float(max(subtree_size(node_a), subtree_size(node_b)))
-
         node_type = node_a.node_type
 
-        if node_type == NodeType.SCALAR:
-            return cost_update(node_a, node_b, self._backend, self._config)
-
         if node_type == NodeType.KEY:
-            # Key-label edit cost
             key_label_dist = cost_update(node_a, node_b, self._backend, self._config)
-            # Recursive value-child distance
-            if node_a.children and node_b.children:
-                val_dist = self._compute_node_distance(
-                    node_a.children[0], node_b.children[0], depth + 1
-                )
-            else:
-                # Malformed KEY (no child): same = 0, different = 1
-                val_dist = 0.0 if (not node_a.children and not node_b.children) else 1.0
-            return key_label_dist + val_dist
+            value_key = (id(node_a.children[0]), id(node_b.children[0]), depth + 1)
+            return key_label_dist + self._dist_cache[value_key]
 
         if node_type == NodeType.ELEMENT:
-            # ELEMENT is transparent: distance = its single value-child distance
-            if node_a.children and node_b.children:
-                return self._compute_node_distance(
-                    node_a.children[0], node_b.children[0], depth + 1
-                )
-            return 0.0 if (not node_a.children and not node_b.children) else 1.0
+            value_key = (id(node_a.children[0]), id(node_b.children[0]), depth + 1)
+            return self._dist_cache[value_key]
 
         if node_type == NodeType.OBJECT:
-            if not node_a.children and not node_b.children:
-                return 0.0
             return self._match_children_hungarian(
                 node_a.children, node_b.children, depth + 1
             )
 
-        # ARRAY (final variant)
-        if not node_a.children and not node_b.children:
-            return 0.0
+        # ARRAY (final variant — NodeType has exactly five members and
+        # SCALAR/KEY/ELEMENT/OBJECT are handled above or short-circuited
+        # in the ENTER phase).
         mode = self._resolve_array_mode(node_a, node_b)
         if mode == ArrayComparisonMode.ORDERED:
             return self._match_children_sequence(
